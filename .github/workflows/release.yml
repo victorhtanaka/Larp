@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build (a SemVer tag is required to publish)
+        type: string
+        required: true
+        default: main
+      publish:
+        description: Create a public GitHub Release
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Select ref
+        id: selected-ref
+        shell: pwsh
+        env:
+          DISPATCH_REF: ${{ inputs.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_REF: ${{ github.ref }}
+        run: |
+          if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            "ref=$env:DISPATCH_REF" >> $env:GITHUB_OUTPUT
+          } else {
+            "ref=$env:PUSH_REF" >> $env:GITHUB_OUTPUT
+          }
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.selected-ref.outputs.ref }}
+          fetch-depth: 0
+      - name: Record checked-out commit
+        id: commit
+        shell: pwsh
+        run: '"sha=$((git rev-parse HEAD).Trim())" >> $env:GITHUB_OUTPUT'
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run make
+      - name: Validate and stage release files
+        shell: pwsh
+        run: |
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE 'out/make/squirrel.windows/x64'
+          if (-not (Test-Path -LiteralPath $sourceDir -PathType Container)) {
+            throw "Forge output directory not found: $sourceDir"
+          }
+          $releases = @(Get-ChildItem -LiteralPath $sourceDir -File -Filter 'RELEASES')
+          $packages = @(Get-ChildItem -LiteralPath $sourceDir -File -Filter '*.nupkg')
+          $setups = @(Get-ChildItem -LiteralPath $sourceDir -File | Where-Object { $_.Name -cmatch 'Setup\.exe$' })
+          if ($releases.Count -ne 1 -or $packages.Count -ne 1 -or $setups.Count -ne 1) {
+            throw "Expected exactly one RELEASES, .nupkg, and .Setup.exe; found $($releases.Count), $($packages.Count), $($setups.Count)."
+          }
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'release-artifact'
+          New-Item -ItemType Directory -Path $artifactDir | Out-Null
+          foreach ($file in @($releases[0], $packages[0], $setups[0])) {
+            Copy-Item -LiteralPath $file.FullName -Destination $artifactDir
+          }
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: release-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact build commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.commit_sha }}
+          fetch-depth: 0
+      - name: Validate publish ref
+        id: release
+        shell: pwsh
+        env:
+          SELECTED_REF: ${{ inputs.ref }}
+          BUILT_COMMIT: ${{ needs.build.outputs.commit_sha }}
+        run: |
+          if ($env:SELECTED_REF -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'Publishing requires a SemVer tag in the form vX.Y.Z.'
+          }
+          $tag = $env:SELECTED_REF
+          $version = $tag.Substring(1)
+          $package = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'package.json') -Raw | ConvertFrom-Json
+          if ($package.version -cne $version) {
+            throw "Tag version $version does not match package.json version $($package.version)."
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Confirm checked-out commit and tag
+        shell: pwsh
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.build.outputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:BUILT_COMMIT) {
+            throw 'Publish checkout does not match the commit built by this run.'
+          }
+          git show-ref --verify --quiet "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Git tag $env:TAG does not exist."
+          }
+          $tagCommit = (git rev-list -n 1 $env:TAG).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagCommit -cne $env:BUILT_COMMIT) {
+            throw "Git tag $env:TAG does not point to the commit built by this run."
+          }
+          $release = gh release view $env:TAG --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "GitHub Release $env:TAG already exists."
+          }
+          $LASTEXITCODE = 0
+      - name: Download release files from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: release-artifact
+      - name: Create public GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $files = @(Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'release-artifact') -File)
+          $releases = @($files | Where-Object { $_.Name -ceq 'RELEASES' })
+          $packages = @($files | Where-Object { $_.Name -cmatch '\.nupkg$' })
+          $setups = @($files | Where-Object { $_.Name -cmatch 'Setup\.exe$' })
+          if ($files.Count -ne 3 -or $releases.Count -ne 1 -or $packages.Count -ne 1 -or $setups.Count -ne 1) {
+            throw 'Downloaded artifact must contain exactly RELEASES, one .nupkg, and one .Setup.exe.'
+          }
+          gh release create $env:TAG --generate-notes --title $env:TAG -- $files.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw 'GitHub Release creation failed.'
+          }

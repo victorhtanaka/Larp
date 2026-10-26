@@ -103,7 +103,9 @@ npm test
 npm run make
 ```
 
-Os testes cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`.
+Os testes locais cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
+
+O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
 
 ## Atualizações automáticas e Pesquisa do Windows
 
@@ -113,17 +115,24 @@ O manipulador `electron-squirrel-startup` cria atalhos no menu Iniciar e na áre
 
 Para publicar uma atualização:
 
-1. Atualize `version` no `package.json` e no lockfile com uma versão SemVer maior que a instalada.
-2. Execute `npm run make`.
-3. Crie uma Release pública no [repositório do Larp](https://github.com/victorhtanaka/Larp) e envie o arquivo `RELEASES` e o pacote `.nupkg` gerados em `out/make/squirrel.windows/x64`. Envie também `Setup.exe` para novas instalações.
+1. Atualize `version` no `package.json` e no lockfile, faça commit e envie o código de release.
+2. Crie e envie uma nova tag `vX.Y.Z` no commit que contém esse código. Não reescreva tags publicadas.
+3. Aguarde o workflow `Release` disparado pela tag concluir build, typecheck e testes; esse evento nunca publica uma Release.
+4. Para publicar, execute manualmente `workflow_dispatch` com `ref=vX.Y.Z` e `publish=true`. A publicação valida a tag e a versão do pacote; `publish=false` (padrão) só gera o artifact.
 
 O updater exige Releases públicas com os artefatos Squirrel; o `Setup.exe` isolado não contém os dados usados para atualizar uma instalação existente. Instalações anteriores à versão `0.2.0` precisam instalar manualmente essa versão uma vez para receber atualizações futuras.
 
 A atualização automática usa o `autoUpdater` integrado do Electron e é executada somente no app Windows empacotado. Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos e limites.
 
 
-## Validação externa pendente
+## Validação externa e bloqueios
 
-A validação local não equivale a um ensaio de rede real. A Release pública `v0.2.1` foi publicada com `RELEASES`, `.nupkg` e `Setup.exe`. Na última consulta, o feed de `update.electronjs.org` ainda retornou o manifesto antigo da `v0.2.0`, embora a API pública liste `v0.2.1` como release mais recente; repetir a consulta após a renovação do cache e testar o download, instalação e reinício automáticos. Também permanecem pendentes: o fluxo entre dois PCs, as políticas RLS implantadas, corrida pela sexta vaga, convite expirado/reutilizado, acesso de não membro, remoção entre clientes, STUN/TURN forçado, queda de rede, permissões de mídia em hardware real e carga de seis pessoas. Não declarar disponibilidade para seis participantes até testar seis PCs, voz simultânea e cinco espectadores, medindo CPU/GPU, upload, FPS, resolução, perda e atraso. O ensaio também deve confirmar no painel que nenhum limite ativa cobrança.
+O feed público para `0.2.0/RELEASES` aponta para `Larp-0.2.1-full.nupkg`, hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082` bytes, igual ao `RELEASES` da Release `v0.2.1`. Os Setup `0.2.0` e `0.2.1` baixados correspondem aos SHA-256 da API do GitHub. Nenhum Setup foi executado: Windows Sandbox e VM não estão disponíveis e a sessão não é elevada para criar um perfil local descartável; instalação, upgrade, Pesquisa e remoção continuam bloqueados.
+
+O harness Supabase foi adicionado e sua proteção local recusou a URL de distribuição antes de qualquer requisição. Os casos remotos não foram executados porque não há URL/chave de staging nem acesso ao SQL Editor. Não houve escrita no projeto de distribuição.
+
+O app 0.2.1 empacotado abriu com perfil temporário e cloud não configurado. Capturas reais de microfone e tela foram iniciadas e encerradas pelo renderer confiável e pelo handler de display do Electron. A tela de permissão negada/reautorização e a queda/restauração do estado cloud não foram exercitadas: falta staging para ativar um grupo e o app permanece em `not-configured`.
+
+O workflow manual de release está configurado, mas o `workflow_dispatch` não foi executado: esta sessão não tem `gh`, `act` ou token GitHub disponível. Nenhuma Release nova foi criada. ICE relay, reconexão P2P e carga de seis participantes continuam pendentes; há somente um PC, e RTT/perda não são expostos pela interface atual.
 
 Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos, fronteiras e matriz de validação.

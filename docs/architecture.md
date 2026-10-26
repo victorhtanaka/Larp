@@ -63,18 +63,18 @@ A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação
 
 A implantação exige Auth anônimo Supabase, quatro migrações em ordem, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
 
-Verificação automatizada local: `npm run typecheck` e `npm test`. Os testes atuais exercitam migração e persistência SQLite, assinaturas/protocolo, ordem/deduplicação e orçamento de qualidade. `npm run make` gera o pacote Squirrel na plataforma atual. No Windows empacotado, `autoUpdater` consulta o serviço público do Electron antes de iniciar a janela principal. A Release pública `v0.2.1` foi publicada com `RELEASES`, `.nupkg` e `Setup.exe`; na última consulta, o serviço de atualização ainda retornou o manifesto da `v0.2.0`. Repetir a verificação após a renovação do cache; download e reinício automáticos ainda não foram exercitados. Assinatura comercial continua fora do escopo.
+Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`, os sete testes de `npm test` e `npm run make` passaram; o maker gerou os artefatos Squirrel. `npm run test:supabase` exige credenciais públicas de staging isolado e pausa para a fixture expirada. O workflow de release está configurado, mas nenhuma execução GitHub Actions foi disparada nesta validação.
 
 | Ensaio | Estado |
 |---|---|
-| Tipagem e testes automatizados locais | Executáveis no repositório; não validam rede real |
-| `npm run make` Windows x64 e execução do pacote unpacked | Pacote 0.2.1 gerado e executado em smoke test; fechamento normal sem exceção; instalação via `Setup.exe` não executada |
-| Updater Squirrel via GitHub Releases | Release v0.2.1 e os três artefatos publicados; o feed ainda respondia com o manifesto v0.2.0 na última consulta; download/instalação/reinício ainda não exercitados |
-| Pesquisa do Windows | O handler Squirrel cria/remove atalhos; instalação via `Setup.exe` ainda precisa ser exercitada |
-| Dois PCs na mesma rede e em redes distintas | Pendente de Supabase configurado e PCs independentes |
-| Convites expirados/reutilizados, concorrência pela sexta vaga, RLS e remoção | Pendente de projeto Supabase configurado; as funções transacionais estão no SQL, mas não foram exercitadas em banco remoto |
-| TURN forçado, falha de TURN e indisponibilidade Supabase | Pendente de credenciais e ensaio de rede |
-| Permissões negadas, remoção de dispositivo e fechamento da janela | Fechamento verificado em smoke test; permissões e remoção ainda pendentes em hardware/contas reais |
-| Seis PCs, voz simultânea e cinco espectadores; CPU/GPU, FPS, resolução, upload, perda e atraso | Pendente; não declarar suporte validado a seis participantes antes do ensaio |
+| Tipagem e testes automatizados | `npm run typecheck` e `npm test`: aprovados; sete testes locais, sem prova de rede remota |
+| `npm run make` Windows x64 | Aprovado; `RELEASES`, um `.nupkg` e `Larp-0.2.1 Setup.exe` gerados; matcher do workflow aceitou os três |
+| Feed updater e Setup publicado | Feed `0.2.0/RELEASES` aponta para hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082`; SHA-256 dos Setup 0.2.0/0.2.1 coincide com a API GitHub |
+| Instalação, upgrade, Pesquisa e uninstall | Bloqueados: Windows Sandbox/VM indisponíveis e sessão sem elevação; nenhum Setup foi executado |
+| Supabase RLS, convites, remoção e corrida | Harness isolado implementado; recusou localmente a URL de distribuição com caminho alternativo e chave `sb_secret_`. Casos remotos não executados por falta de staging, Auth/painel e credenciais; projeto de distribuição intocado |
+| Captura local de mídia | App empacotado 0.2.1 abriu com perfil temporário sem cloud; captura real de microfone e tela 1920×1080 passou pelos handlers Electron e foi encerrada. Fluxo de negação/reautorização e UI dependente de grupo não testados |
+| Rede, WebRTC e TURN | Não validados: sem projeto staging e sem segundo PC. Um peer `disconnected` é descartado após 12 s; ICE `failed` tenta restart e expira após 20 s. Sem prova relay |
+| Carga de seis participantes | Pendente: exige seis PCs; RTT e perda não aparecem nas métricas da interface |
+| Workflow de release | Configurado para build em tags e publicação manual; matcher local aprovado. `workflow_dispatch` não executado por falta de cliente/token GitHub; nenhuma Release nova criada |
 
-A configuração externa não está incluída no checkout. Logo, a comunicação real entre PCs e o desempenho máximo não podem ser declarados validados apenas por build/testes locais.
+Configuração Supabase/credenciais TURN não estão incluídas no checkout. Nenhuma mutação foi feita no projeto de distribuição. Builds e capturas locais não validam comunicação entre PCs, seleção de relay, reconexão ou capacidade máxima.
