@@ -91,6 +91,7 @@ Quando a função não fornece credenciais TURN (por configuração, limite ou s
 - Escolha explícita de monitor/janela; áudio do sistema desativado por padrão; reserva única de compartilhamento com expiração e liberação ao parar.
 - Modos Movimento e Texto, codecs negociados (AV1/VP9/H.264/VP8 conforme suporte), orçamento total padrão de 20 Mb/s e teto de 8 Mb/s por conexão; métricas de resolução, FPS, codec, upload e caminho observado.
 - Electron com `contextIsolation`, sandbox, Node desativado no renderer, permissões explícitas e IPC validado no processo principal.
+- A nova logo aparece no cabeçalho do Larp e na janela do updater; o ícone Windows é incluído no executável e no Setup Squirrel.
 
 1080p/60 FPS é uma meta mensurada, não uma garantia. O codec anunciado não prova aceleração por GPU. O modo de qualidade adapta envio por par para preservar voz e respeitar o orçamento configurado.
 
@@ -102,10 +103,27 @@ npm test
 npm run make
 ```
 
-Os testes cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` produz o instalador Squirrel para a plataforma atual; em Windows x64, verifique os artefatos `Setup.exe` e `.nupkg` gerados em `out/make`.
+Os testes cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`.
+
+## Atualizações automáticas e Pesquisa do Windows
+
+Nas instalações Windows x64 feitas pelo `Setup.exe` Squirrel, o Larp abre uma janela compacta antes da interface principal e consulta [update.electronjs.org](https://update.electronjs.org) para `victorhtanaka/Larp`. Quando há uma versão mais nova, o Squirrel baixa o pacote, instala e reinicia o app; sem atualização, a janela fecha quando o Larp está pronto. Se a consulta falhar, é possível tentar novamente ou abrir a versão instalada; sem ação, o Larp abre a versão instalada após seis segundos. A primeira execução logo após a instalação ignora a consulta porque o Squirrel mantém os arquivos bloqueados durante a configuração.
+
+O manipulador `electron-squirrel-startup` cria atalhos no menu Iniciar e na área de trabalho durante a instalação, e os remove na desinstalação. O atalho do menu Iniciar permite localizar o Larp pela Pesquisa do Windows.
+
+Para publicar uma atualização:
+
+1. Atualize `version` no `package.json` e no lockfile com uma versão SemVer maior que a instalada.
+2. Execute `npm run make`.
+3. Crie uma Release pública no [repositório do Larp](https://github.com/victorhtanaka/Larp) e envie o arquivo `RELEASES` e o pacote `.nupkg` gerados em `out/make/squirrel.windows/x64`. Envie também `Setup.exe` para novas instalações.
+
+O updater exige Releases públicas com os artefatos Squirrel; o `Setup.exe` isolado não contém os dados usados para atualizar uma instalação existente. Instalações anteriores à versão `0.2.0` precisam instalar manualmente essa versão uma vez para receber atualizações futuras.
+
+A atualização automática usa o `autoUpdater` integrado do Electron e é executada somente no app Windows empacotado. Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos e limites.
+
 
 ## Validação externa pendente
 
-A validação local não equivale a um ensaio de rede real. Este checkout não contém projeto Supabase nem credenciais TURN; por isso, permanecem pendentes: o fluxo entre dois PCs, as políticas RLS implantadas, corrida pela sexta vaga, convite expirado/reutilizado, acesso de não membro, remoção entre clientes, STUN/TURN forçado, queda de rede, permissões de mídia em hardware real e carga de seis pessoas. Não declarar disponibilidade para seis participantes até testar seis PCs, voz simultânea e cinco espectadores, medindo CPU/GPU, upload, FPS, resolução, perda e atraso. O ensaio também deve confirmar no painel que nenhum limite ativa cobrança.
+A validação local não equivale a um ensaio de rede real. A Release pública `v0.2.1` foi publicada com `RELEASES`, `.nupkg` e `Setup.exe`. Na última consulta, o feed de `update.electronjs.org` ainda retornou o manifesto antigo da `v0.2.0`, embora a API pública liste `v0.2.1` como release mais recente; repetir a consulta após a renovação do cache e testar o download, instalação e reinício automáticos. Também permanecem pendentes: o fluxo entre dois PCs, as políticas RLS implantadas, corrida pela sexta vaga, convite expirado/reutilizado, acesso de não membro, remoção entre clientes, STUN/TURN forçado, queda de rede, permissões de mídia em hardware real e carga de seis pessoas. Não declarar disponibilidade para seis participantes até testar seis PCs, voz simultânea e cinco espectadores, medindo CPU/GPU, upload, FPS, resolução, perda e atraso. O ensaio também deve confirmar no painel que nenhum limite ativa cobrança.
 
-Assinatura comercial do instalador e atualização automática estão fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos, fronteiras e matriz de validação.
+Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos, fronteiras e matriz de validação.

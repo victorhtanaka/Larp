@@ -53,22 +53,8 @@ button:disabled { cursor: not-allowed; }
   padding: 18px 11px 12px;
   border-right: 1px solid var(--border);
 }
-.brand-row { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 7px; }
-.brand-mark {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  color: var(--text);
-  background: var(--accent);
-  border-radius: 7px;
-  font-family: Georgia, serif;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1;
-}
-.brand-wordmark { font-size: 20px; font-weight: 750; letter-spacing: -.8px; }
-.brand-wordmark span { color: var(--accent-teal); }
+.brand-row { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 7px; }
+.brand-logo { display: block; width: 104px; height: 38px; flex: none; object-fit: contain; object-position: left center; }
 .build-chip {
   margin-left: auto;
   padding: 4px 6px;

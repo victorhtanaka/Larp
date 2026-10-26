@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Larp — Atualização</title>
+  </head>
+  <body>
+    <main class="updater-window" aria-labelledby="updater-title">
+      <header class="window-header" aria-label="Larp">
+        <img class="brand-logo" alt="" aria-hidden="true" />
+      </header>
+      <section class="update-content" aria-live="polite" aria-atomic="true">
+        <h1 id="updater-title">Verificando atualizações</h1>
+        <p id="updater-description">Aguarde enquanto o Larp procura uma versão nova.</p>
+        <div id="updater-progress" class="progress-track" role="progressbar" aria-label="Atualização em andamento">
+          <span class="progress-indicator"></span>
+        </div>
+      </section>
+      <section id="updater-actions" class="actions" aria-label="Opções de inicialização" hidden>
+        <button id="retry-update" class="button secondary" type="button" hidden>Tentar novamente</button>
+        <button id="continue-update" class="button primary" type="button">Abrir Larp</button>
+      </section>
+      <footer id="updater-version" class="version-label">Versão instalada</footer>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

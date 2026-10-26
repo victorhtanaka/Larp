@@ -57,22 +57,24 @@ TURN é entregue pela Edge Function `turn-credentials`, que valida JWT e associa
 
 ## Segurança Electron
 
-A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação externa e janelas novas são bloqueadas. O preload oferece métodos tipados e específicos. O processo principal valida janela e frame de origem, UUIDs, limites de texto/envelope e assinaturas antes das operações. Permissões de microfone e display são restritas à janela principal; tela exige uma seleção de uso único no processo principal. Credenciais administrativas nunca são expostas ao renderer.
+A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação externa e janelas novas são bloqueadas. O preload oferece métodos tipados e específicos. O processo principal valida janela e frame de origem, UUIDs, limites de texto/envelope e assinaturas antes das operações. Permissões de microfone e display são restritas à janela principal; tela exige uma seleção de uso único no processo principal. Ao fechar a janela principal, a limpeza da captura usa o ID de `webContents` salvo antes de `closed`, sem acessar o `BrowserWindow` já destruído. Credenciais administrativas nunca são expostas ao renderer.
 
 ## Configuração e verificação
 
 A implantação exige Auth anônimo Supabase, quatro migrações em ordem, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
 
-Verificação automatizada local: `npm run typecheck` e `npm test`. Os testes atuais exercitam migração e persistência SQLite, assinaturas/protocolo, ordem/deduplicação e orçamento de qualidade. `npm run make` gera o pacote Squirrel na plataforma atual. Assinatura comercial e atualização automática não estão incluídas.
+Verificação automatizada local: `npm run typecheck` e `npm test`. Os testes atuais exercitam migração e persistência SQLite, assinaturas/protocolo, ordem/deduplicação e orçamento de qualidade. `npm run make` gera o pacote Squirrel na plataforma atual. No Windows empacotado, `autoUpdater` consulta o serviço público do Electron antes de iniciar a janela principal. A Release pública `v0.2.1` foi publicada com `RELEASES`, `.nupkg` e `Setup.exe`; na última consulta, o serviço de atualização ainda retornou o manifesto da `v0.2.0`. Repetir a verificação após a renovação do cache; download e reinício automáticos ainda não foram exercitados. Assinatura comercial continua fora do escopo.
 
 | Ensaio | Estado |
 |---|---|
 | Tipagem e testes automatizados locais | Executáveis no repositório; não validam rede real |
-| `npm run make` Windows x64 e execução do pacote unpacked | Gerado pelo maker Squirrel e iniciado em smoke test; instalação via `Setup.exe` não executada |
+| `npm run make` Windows x64 e execução do pacote unpacked | Pacote 0.2.1 gerado e executado em smoke test; fechamento normal sem exceção; instalação via `Setup.exe` não executada |
+| Updater Squirrel via GitHub Releases | Release v0.2.1 e os três artefatos publicados; o feed ainda respondia com o manifesto v0.2.0 na última consulta; download/instalação/reinício ainda não exercitados |
+| Pesquisa do Windows | O handler Squirrel cria/remove atalhos; instalação via `Setup.exe` ainda precisa ser exercitada |
 | Dois PCs na mesma rede e em redes distintas | Pendente de Supabase configurado e PCs independentes |
 | Convites expirados/reutilizados, concorrência pela sexta vaga, RLS e remoção | Pendente de projeto Supabase configurado; as funções transacionais estão no SQL, mas não foram exercitadas em banco remoto |
 | TURN forçado, falha de TURN e indisponibilidade Supabase | Pendente de credenciais e ensaio de rede |
-| Permissões negadas, remoção de dispositivo e janela fechada | Pendente de ensaio em hardware Windows |
+| Permissões negadas, remoção de dispositivo e fechamento da janela | Fechamento verificado em smoke test; permissões e remoção ainda pendentes em hardware/contas reais |
 | Seis PCs, voz simultânea e cinco espectadores; CPU/GPU, FPS, resolução, upload, perda e atraso | Pendente; não declarar suporte validado a seis participantes antes do ensaio |
 
 A configuração externa não está incluída no checkout. Logo, a comunicação real entre PCs e o desempenho máximo não podem ser declarados validados apenas por build/testes locais.

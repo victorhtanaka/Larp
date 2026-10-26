@@ -1,0 +1,80 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, 'Segoe UI', sans-serif;
+  color: #F0F0F0;
+  background: #1A1A1A;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: #1A1A1A; }
+button { font: inherit; }
+button:focus-visible { outline: 2px solid #F0F0F0; outline-offset: 3px; }
+
+.updater-window {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  padding: 16px 22px 15px;
+  background: #1A1A1A;
+  border: 1px solid #383B41;
+  border-radius: 10px;
+}
+.window-header {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 9px;
+  -webkit-app-region: drag;
+}
+.brand-logo { display: block; width: 78px; height: 28px; object-fit: contain; object-position: left center; }
+.update-content { flex: 1; padding-top: 22px; }
+h1 { margin: 0; color: #F0F0F0; font-size: 17px; font-weight: 680; line-height: 1.35; }
+p { min-height: 39px; margin: 7px 0 0; color: #B3B6BD; font-size: 12px; line-height: 1.55; }
+.progress-track {
+  position: relative;
+  height: 4px;
+  margin-top: 12px;
+  overflow: hidden;
+  background: #303238;
+  border-radius: 999px;
+}
+.progress-indicator {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  background: #43A6A0;
+  border-radius: inherit;
+  animation: loading 1.25s ease-in-out infinite;
+}
+.actions { display: flex; justify-content: flex-end; gap: 9px; min-height: 36px; }
+.actions[hidden], .button[hidden], .progress-track[hidden] { display: none; }
+.button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #383B41;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  transition: background-color 120ms ease, border-color 120ms ease;
+  -webkit-app-region: no-drag;
+}
+.button.primary { color: #F0F0F0; background: #3E5641; border-color: #526D56; }
+.button.primary:hover { background: #49654D; }
+.button.secondary { color: #F0F0F0; background: #27292D; }
+.button.secondary:hover { background: #34373C; border-color: #4A4D53; }
+.version-label { margin-top: 10px; color: #92969E; font-size: 10px; }
+
+@keyframes loading {
+  from { transform: translateX(-115%); }
+  to { transform: translateX(270%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-indicator { width: 38%; animation: none; transform: translateX(80%); }
+  .button { transition: none; }
+}

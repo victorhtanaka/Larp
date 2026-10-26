@@ -1,3 +1,4 @@
+import squirrelStartup from 'electron-squirrel-startup';
 import { app, BrowserWindow, desktopCapturer, session } from 'electron';
 import { constants } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
@@ -7,12 +8,17 @@ import { createLarpDatabase, type LocalLarpDatabase } from './database';
 import { registerIpcHandlers } from './ipc';
 import { createLarpRuntime } from './services/runtime';
 import { clearDesktopDisplayCapture, consumeDesktopDisplayCapture, hasPreparedDesktopDisplayCapture } from './display-capture';
+import { closeStartupUpdater, runStartupUpdater } from './updater';
+import { getAppIconPath } from './app-icon';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 let mainWindow: BrowserWindow | null = null;
 let database: LocalLarpDatabase | null = null;
+let isAppStarting = true;
+const appUserModelId = 'com.squirrel.Larp.Larp';
+app.setAppUserModelId(appUserModelId);
 
 async function installPackagedCloudConfig(userDataPath: string): Promise<void> {
   if (!app.isPackaged) return;
@@ -31,13 +37,14 @@ async function installPackagedCloudConfig(userDataPath: string): Promise<void> {
 function createWindow(): void {
   if (!database) throw new Error('Banco local ainda não foi inicializado.');
 
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 980,
     minHeight: 680,
     title: 'Larp',
     backgroundColor: '#1A1A1A',
+    icon: getAppIconPath(),
 
     show: false,
     webPreferences: {
@@ -47,16 +54,21 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow = window;
+  const webContentsId = window.webContents.id;
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.once('ready-to-show', () => {
+    window.show();
+    closeStartupUpdater();
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   const devServerOrigin = MAIN_WINDOW_VITE_DEV_SERVER_URL
     ? new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
     : undefined;
   const rendererFileUrl = pathToFileURL(
     join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
   ).href;
-  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+  window.webContents.on('will-navigate', (event, targetUrl) => {
     try {
       const target = new URL(targetUrl);
       if (devServerOrigin && target.origin === devServerOrigin) return;
@@ -69,18 +81,20 @@ function createWindow(): void {
 
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    void mainWindow.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+    void window.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
   }
 
-  mainWindow.on('closed', () => {
-    if (mainWindow) clearDesktopDisplayCapture(mainWindow.webContents.id);
-    mainWindow = null;
+  window.on('closed', () => {
+    clearDesktopDisplayCapture(webContentsId);
+    if (mainWindow === window) mainWindow = null;
   });
 }
 
-app.whenReady().then(async () => {
+if (!squirrelStartup) app.whenReady().then(async () => {
+  const shouldStartApp = await runStartupUpdater();
+  if (!shouldStartApp) return;
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const trustedWindow = mainWindow !== null && BrowserWindow.fromWebContents(webContents) === mainWindow;
     const requested = 'mediaTypes' in details ? details.mediaTypes ?? [] : [];
@@ -123,6 +137,7 @@ app.whenReady().then(async () => {
   const runtime = await createLarpRuntime(userDataPath);
   registerIpcHandlers(database, () => mainWindow, runtime);
   createWindow();
+  isAppStarting = false;
   void runtime.refreshCloud();
 
   app.on('activate', () => {
@@ -136,5 +151,5 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin' && !isAppStarting) app.quit();
 });

@@ -1,10 +1,14 @@
 {
   "name": "larp",
   "productName": "Larp",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "description": "Chat privado de voz e compartilhamento de tela para Windows",
   "main": ".vite/build/main.cjs",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/victorhtanaka/Larp.git"
+  },
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
@@ -15,6 +19,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
     "better-sqlite3": "^13.0.3",
+    "electron-squirrel-startup": "^1.0.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

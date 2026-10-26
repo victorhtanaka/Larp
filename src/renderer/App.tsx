@@ -6,6 +6,8 @@ import { createGroupPeerMesh } from './rtc/create-peer-mesh';
 import type { PeerMesh, PeerConnectionStatus } from './rtc/peer-mesh';
 import type { PeerMediaStats } from './media/quality';
 import { useMediaController } from './media/use-media-controller';
+import larpWordmarkUrl from '../assets/larp-wordmark.png';
+
 const INITIAL_CLOUD_STATUS: CloudConnectionStatus = {
   state: 'connecting',
   detail: 'Verificando a configuração de grupos…',
@@ -668,10 +670,8 @@ function App() {
     <main className="app-shell">
       <aside className="sidebar" aria-label="Navegação de grupos">
         <div className="brand-row">
-          <div className="brand-mark" aria-hidden="true">L</div>
-          <div className="brand-wordmark">larp<span>.</span></div>
+          <img className="brand-logo" src={larpWordmarkUrl} alt="Larp" />
           <span className="build-chip">BETA</span>
-
         </div>
 
         <div className={`connection-card connection-${cloudStatus.state}`} aria-label={`Estado da sinalização: ${cloudStatus.state}`}>
