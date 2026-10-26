@@ -53,6 +53,7 @@ export interface LarpBridge {
   releaseScreenShare(groupId: string): Promise<void>;
   listDisplaySources(): Promise<SelectedDisplaySource[]>;
   prepareDisplayCapture(sourceId: string, includeSystemAudio: boolean): Promise<void>;
+  setScreenViewerExpanded(expanded: boolean): Promise<void>;
   persistOutgoingEnvelope(message: SignedChatEnvelope): Promise<void>;
   persistVerifiedEnvelope(message: SignedChatEnvelope): Promise<'inserted' | 'duplicate' | 'conflict'>;
   readMissingEnvelopes(groupId: string, authorId: string, afterSequence: number, throughSequence: number, limit: number): Promise<readonly SignedChatEnvelope[]>;

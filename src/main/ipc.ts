@@ -41,6 +41,8 @@ export function registerIpcHandlers(
   getMainWindow: () => BrowserWindow | null,
   runtime: LarpRuntime,
 ): void {
+  const screenViewerRestoreState = new WeakMap<BrowserWindow, { wasMaximized: boolean; wasFullScreen: boolean }>();
+
   const refreshCloudAndCache = async () => {
     const status = await runtime.refreshCloud();
     if (status.state === 'ready') {
@@ -68,6 +70,31 @@ export function registerIpcHandlers(
     }
     await prepareDesktopDisplayCapture(event.sender.id, requireText(input.sourceId, 512, 'Fonte'), input.includeSystemAudio);
   });
+  ipcMain.handle('window:set-screen-viewer-expanded', (event, expanded: unknown) => {
+    const window = getMainWindow();
+    if (!window) throw new Error('Janela principal indisponível.');
+    assertTrustedFrame(event, window);
+    if (typeof expanded !== 'boolean') throw new TypeError('Estado da visualização de tela inválido.');
+
+    if (expanded) {
+      if (!screenViewerRestoreState.has(window)) {
+        screenViewerRestoreState.set(window, {
+          wasMaximized: window.isMaximized(),
+          wasFullScreen: window.isFullScreen(),
+        });
+      }
+      if (window.isFullScreen()) window.setFullScreen(false);
+      if (!window.isMaximized()) window.maximize();
+      return;
+    }
+
+    const restoreState = screenViewerRestoreState.get(window);
+    if (!restoreState) return;
+    screenViewerRestoreState.delete(window);
+    if (restoreState.wasFullScreen) window.setFullScreen(true);
+    else if (!restoreState.wasMaximized && window.isMaximized()) window.unmaximize();
+  });
+
   ipcMain.handle('screen-share:acquire', async (event, groupValue: unknown) => {
     assertTrustedFrame(event, getMainWindow());
     const groupId = requireUuid(groupValue, 'Grupo');

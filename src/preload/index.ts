@@ -41,6 +41,7 @@ const bridge: LarpBridge = {
   listDisplaySources: () => ipcRenderer.invoke('display:list-sources'),
   prepareDisplayCapture: (sourceId, includeSystemAudio) =>
     ipcRenderer.invoke('display:prepare', { sourceId, includeSystemAudio }),
+  setScreenViewerExpanded: (expanded) => ipcRenderer.invoke('window:set-screen-viewer-expanded', expanded),
   acquireScreenShare: (groupId) => ipcRenderer.invoke('screen-share:acquire', groupId),
   releaseScreenShare: (groupId) => ipcRenderer.invoke('screen-share:release', groupId),
   getCachedCloudGroups: () => ipcRenderer.invoke('cloud:get-cache'),

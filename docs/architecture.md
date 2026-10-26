@@ -49,7 +49,7 @@ O histórico ausente é solicitado em faixas e lotes limitados. Cada participant
 
 A voz usa `getUserMedia`, Opus quando compatível, cancelamento de eco e supressão de ruído. O usuário seleciona microfone e saída, pode testar o microfone, silenciar entrada e silenciar reprodução. Captura de áudio só é permitida na janela principal e por solicitação explícita.
 
-A captura de tela/janela exige seleção explícita no processo principal. Áudio de sistema começa desativado. Uma concessão SQL atômica permite uma tela por grupo; a reserva expira após 45 segundos sem renovação e é liberada ao parar ou sair. A captura e as faixas são encerradas no stop/fechamento.
+A captura de tela/janela exige seleção explícita no processo principal. Áudio de sistema começa desativado. Uma concessão SQL atômica permite uma tela por grupo; a reserva expira após 45 segundos sem renovação e é liberada ao parar ou sair. A captura e as faixas são encerradas no stop/fechamento. A visualização expande a transmissão dentro da janela maximizada, respeitando a área de trabalho do Windows; `Esc` retorna ao modo normal sem usar tela cheia exclusiva do sistema.
 
 O controlador prefere AV1, VP9, H.264 e VP8 conforme os codecs anunciados; a presença de codec não prova aceleração por GPU. `contentHint` é `motion` ou `text`. O orçamento total padrão é 20 Mb/s, distribuído entre espectadores, com teto de 8 Mb/s por conexão. Parâmetros são ajustados pela rota e pressão observada do codificador; áudio não participa do orçamento de vídeo. A interface apresenta resolução, FPS, codec, upload e candidato direto/relay medidos. 1080p/60 é meta, não garantia.
 

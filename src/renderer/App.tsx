@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChatMessage, SelectedDisplaySource, TurnCredentialServer } from '../shared/contracts';
 import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupSummary, PublicIdentity } from '../shared/cloud-contracts';
 import type { SignedChatEnvelope } from '../shared/webrtc-protocol';
@@ -20,7 +20,7 @@ function describeError(error: unknown, fallback: string): string {
     : fallback;
 }
 
-type IconName = 'bubble' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'users' | 'close' | 'chevron' | 'spark';
+type IconName = 'bubble' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const shapes: Record<IconName, ReactNode> = {
@@ -34,6 +34,8 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     mic: <><rect x="9" y="2" width="6" height="13" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M9 22h6" /></>,
     headphones: <><path d="M3 14v-3a9 9 0 0 1 18 0v3" /><rect x="3" y="13" width="4" height="7" rx="2" /><rect x="17" y="13" width="4" height="7" rx="2" /></>,
     screen: <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></>,
+    expand: <><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" /></>,
+    shrink: <><path d="M8 3v3a2 2 0 0 1-2 2H3M21 3h-3a2 2 0 0 0-2 2v3M3 21h3a2 2 0 0 0 2-2v-3M21 21h-3a2 2 0 0 1-2-2v-3" /></>,
     users: <><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="10" cy="7" r="4" /><path d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
     close: <><path d="m18 6-12 12M6 6l12 12" /></>,
     chevron: <><path d="m9 18 6-6-6-6" /></>,
@@ -130,10 +132,12 @@ function App() {
   const [sending, setSending] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen'>('connection');
+  const [screenViewerExpanded, setScreenViewerExpanded] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const helpCloseRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const screenViewerToggleRef = useRef<HTMLButtonElement>(null);
   const offlineMode = cloudStatus.state === 'unavailable' || cloudStatus.state === 'not-configured';
   const listedCloudGroups = cloudStatus.state === 'ready'
     ? cloudStatus.groups
@@ -187,6 +191,28 @@ function App() {
     setHelpOpen(true);
     void media.refreshDisplaySources();
   };
+
+  const changeScreenViewerMode = useCallback((expanded: boolean) => {
+    setScreenViewerExpanded(expanded);
+    void window.larp.setScreenViewerExpanded(expanded).catch((cause: unknown) => {
+      setScreenViewerExpanded(false);
+      setError(describeError(cause, 'Não foi possível alterar a visualização da tela.'));
+      void window.larp.setScreenViewerExpanded(false).catch(() => undefined);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!screenViewerExpanded) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      changeScreenViewerMode(false);
+      requestAnimationFrame(() => screenViewerToggleRef.current?.focus());
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [changeScreenViewerMode, screenViewerExpanded]);
+
 
   useEffect(() => {
     void window.larp.refreshCloud()
@@ -330,6 +356,10 @@ function App() {
   );
   const activeMesh = meshReady ? meshRef.current : null;
   const media = useMediaController({ groupId: activeCloudGroup?.id, mesh: activeMesh, connectedPeerIds });
+  useEffect(() => {
+    if (media.displayStream || media.remoteVideoStream || !screenViewerExpanded) return;
+    changeScreenViewerMode(false);
+  }, [changeScreenViewerMode, media.displayStream, media.remoteVideoStream, screenViewerExpanded]);
   useEffect(() => {
     const group = activeCloudGroup;
     if (!group || !localCloudUserId || memberGroupId !== group.id || memberLoading) {
@@ -667,7 +697,7 @@ function App() {
     : cachedCloudMembers.find((member) => member.publicKey === identity?.publicKey)?.userId;
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${screenViewerExpanded ? ' app-shell-screen-expanded' : ''}`}>
       <aside className="sidebar" aria-label="Navegação de grupos">
         <div className="brand-row">
           <img className="brand-logo" src={larpWordmarkUrl} alt="Larp" />
@@ -775,14 +805,29 @@ function App() {
         </div>
 
 
-        <section className="message-list" aria-label={`Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live="polite">
+        <section className="message-list" aria-label={`Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live={screenViewerExpanded ? 'off' : 'polite'}>
           {(media.displayStream || media.remoteVideoStream) && (
-            <div className="screen-stage">
-              <video ref={media.screenVideoRef} muted={Boolean(media.displayStream)} autoPlay playsInline aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'} />
-              <div className="screen-stage-heading">
-                <strong>{media.displayStream ? `Você está compartilhando · ${media.shareSourceName}` : 'Tela compartilhada ao vivo'}</strong>
-                {media.shareActive && <span>{media.shareStats.length ? media.shareStats.map(describePeerMediaStats).join('  |  ') : 'Aguardando métricas de envio…'}</span>}
+            <div className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`}>
+              <div className="screen-stage-header">
+                <div className="screen-stage-heading">
+                  <strong>{media.displayStream ? `Você está compartilhando · ${media.shareSourceName}` : 'Tela compartilhada ao vivo'}</strong>
+                  {media.shareActive && <span>{media.shareStats.length ? media.shareStats.map(describePeerMediaStats).join('  |  ') : 'Aguardando métricas de envio…'}</span>}
+                </div>
+                <button
+                  ref={screenViewerToggleRef}
+                  type="button"
+                  className="screen-stage-toggle"
+                  aria-label={screenViewerExpanded ? 'Sair da tela cheia em janela' : 'Exibir transmissão em tela cheia na janela'}
+                  aria-pressed={screenViewerExpanded}
+                  aria-keyshortcuts={screenViewerExpanded ? 'Escape' : undefined}
+                  title={screenViewerExpanded ? 'Restaurar janela anterior (Esc)' : 'Maximizar sem ocultar a barra de tarefas'}
+                  onClick={() => changeScreenViewerMode(!screenViewerExpanded)}
+                >
+                  <Icon name={screenViewerExpanded ? 'shrink' : 'expand'} size={16} />
+                  <span>{screenViewerExpanded ? 'Sair da tela cheia' : 'Tela cheia em janela'}</span>
+                </button>
               </div>
+              <video ref={media.screenVideoRef} muted={Boolean(media.displayStream)} autoPlay playsInline aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'} />
             </div>
           )}
           {cloudStatus.state === 'connecting' ? (
