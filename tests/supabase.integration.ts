@@ -101,6 +101,18 @@ async function scenario(url: string, key: string): Promise<void> {
   }
   const listed = await rpc<unknown[]>(member, 'list_group_members', { p_group_id: groupId });
   assert.equal(listed.length, 2, 'Member RPC must list both group members.');
+  const ownerLease = await rpc<boolean>(owner, 'acquire_group_share_lease', { p_group_id: groupId });
+  assert.equal(ownerLease, true, 'Group owner must acquire the screen-share lease.');
+  try {
+    const competingLease = await rpc<boolean>(member, 'acquire_group_share_lease', { p_group_id: groupId });
+    assert.equal(competingLease, false, 'A second member must not acquire an active screen-share lease.');
+  } finally {
+    await rpc(owner, 'release_group_share_lease', { p_group_id: groupId });
+  }
+  const memberLease = await rpc<boolean>(member, 'acquire_group_share_lease', { p_group_id: groupId });
+  assert.equal(memberLease, true, 'A member must acquire the released screen-share lease.');
+  await rpc(member, 'release_group_share_lease', { p_group_id: groupId });
+
   await tableRead(outsider, 'larp_groups', groupId);
   await tableRead(outsider, 'larp_group_members', groupId);
   await expectFailure(() => rpc(outsider, 'list_group_members', { p_group_id: groupId }), 'membership required', 'Nonmember must be denied member listing.');

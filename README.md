@@ -41,6 +41,7 @@ Apagar ou perder a chave de identidade impede a recuperação da conta/grupos po
    - `supabase/migrations/0002_group_lifecycle.sql`
    - `supabase/migrations/0003_screen_share_leases.sql`
    - `supabase/migrations/0004_membership_realtime.sql`
+   - `supabase/migrations/20261026222746_fix_screen_share_lease_timestamp.sql`
 4. O instalador Windows inclui `default-cloud-config.json` com a URL e a chave pública do projeto. Na primeira execução, ele copia esse arquivo para `app.getPath('userData')/config.json` somente se ainda não houver configuração; configurações existentes são preservadas.
    Para executar o projeto a partir do código-fonte, crie `config.json` em `app.getPath('userData')`:
 
@@ -105,7 +106,7 @@ npm run make
 
 Os testes locais cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
 
-O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
+O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais, incluindo aquisição exclusiva e liberação do lease de compartilhamento de tela. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
 
 ## Atualizações automáticas e Pesquisa do Windows
 
@@ -129,7 +130,7 @@ A atualização automática usa o `autoUpdater` integrado do Electron e é execu
 
 O feed público para `0.2.0/RELEASES` aponta para `Larp-0.2.1-full.nupkg`, hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082` bytes, igual ao `RELEASES` da Release `v0.2.1`. Os Setup `0.2.0` e `0.2.1` baixados correspondem aos SHA-256 da API do GitHub. Nenhum Setup foi executado: Windows Sandbox e VM não estão disponíveis e a sessão não é elevada para criar um perfil local descartável; instalação, upgrade, Pesquisa e remoção continuam bloqueados.
 
-O harness Supabase foi adicionado e sua proteção local recusou a URL de distribuição antes de qualquer requisição. Os casos remotos não foram executados porque não há URL/chave de staging nem acesso ao SQL Editor. Não houve escrita no projeto de distribuição.
+O harness Supabase inclui a aquisição exclusiva do lease de tela; a proteção local recusou a URL de distribuição antes de qualquer requisição. A migration `20261026222746_fix_screen_share_lease_timestamp.sql` passou em PostgreSQL 17 temporário, verificando deadline `timestamptz`, exclusão mútua, substituição após expiração e exigência de associação. Os casos remotos não foram executados porque não há URL/chave de staging nem acesso ao SQL Editor; a migration ainda não foi aplicada a nenhum projeto remoto. Não houve escrita no projeto de distribuição.
 
 O app 0.2.1 empacotado abriu com perfil temporário e cloud não configurado. Capturas reais de microfone e tela foram iniciadas e encerradas pelo renderer confiável e pelo handler de display do Electron. A tela de permissão negada/reautorização e a queda/restauração do estado cloud não foram exercitadas: falta staging para ativar um grupo e o app permanece em `not-configured`.
 

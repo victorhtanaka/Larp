@@ -61,7 +61,7 @@ A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação
 
 ## Configuração e verificação
 
-A implantação exige Auth anônimo Supabase, quatro migrações em ordem, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
+A implantação exige Auth anônimo Supabase, migrações ordenadas, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. Projetos existentes precisam aplicar `20261026222746_fix_screen_share_lease_timestamp.sql` antes de reservar compartilhamento de tela; ela corrige `expires_at` para usar uma expressão `timestamptz`. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
 
 Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`, os sete testes de `npm test` e `npm run make` passaram; o maker gerou os artefatos Squirrel. `npm run test:supabase` exige credenciais públicas de staging isolado e pausa para a fixture expirada. O workflow de release está configurado, mas nenhuma execução GitHub Actions foi disparada nesta validação.
 
@@ -71,7 +71,7 @@ Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`
 | `npm run make` Windows x64 | Aprovado; `RELEASES`, um `.nupkg` e `Larp-0.2.1 Setup.exe` gerados; matcher do workflow aceitou os três |
 | Feed updater e Setup publicado | Feed `0.2.0/RELEASES` aponta para hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082`; SHA-256 dos Setup 0.2.0/0.2.1 coincide com a API GitHub |
 | Instalação, upgrade, Pesquisa e uninstall | Bloqueados: Windows Sandbox/VM indisponíveis e sessão sem elevação; nenhum Setup foi executado |
-| Supabase RLS, convites, remoção e corrida | Harness isolado implementado; recusou localmente a URL de distribuição com caminho alternativo e chave `sb_secret_`. Casos remotos não executados por falta de staging, Auth/painel e credenciais; projeto de distribuição intocado |
+| Supabase RLS, convites, leases e corrida | Harness isolado cobre aquisição exclusiva da tela; migração exercitada em PostgreSQL 17 temporário (deadline, exclusividade, expiração e associação). Casos remotos não executados por falta de staging, Auth/painel e credenciais; projeto de distribuição intocado |
 | Captura local de mídia | App empacotado 0.2.1 abriu com perfil temporário sem cloud; captura real de microfone e tela 1920×1080 passou pelos handlers Electron e foi encerrada. Fluxo de negação/reautorização e UI dependente de grupo não testados |
 | Rede, WebRTC e TURN | Não validados: sem projeto staging e sem segundo PC. Um peer `disconnected` é descartado após 12 s; ICE `failed` tenta restart e expira após 20 s. Sem prova relay |
 | Carga de seis participantes | Pendente: exige seis PCs; RTT e perda não aparecem nas métricas da interface |
