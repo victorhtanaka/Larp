@@ -41,7 +41,7 @@ Apagar ou perder a chave de identidade impede a recuperação da conta/grupos po
    - `supabase/migrations/0002_group_lifecycle.sql`
    - `supabase/migrations/0003_screen_share_leases.sql`
    - `supabase/migrations/0004_membership_realtime.sql`
-   - `supabase/migrations/20261026222746_fix_screen_share_lease_timestamp.sql`
+   - `supabase/migrations/20261026230136_fix_screen_share_lease_timestamp.sql`
 4. O instalador Windows inclui `default-cloud-config.json` com a URL e a chave pública do projeto. Na primeira execução, ele copia esse arquivo para `app.getPath('userData')/config.json` somente se ainda não houver configuração; configurações existentes são preservadas.
    Para executar o projeto a partir do código-fonte, crie `config.json` em `app.getPath('userData')`:
 
@@ -128,12 +128,12 @@ A atualização automática usa o `autoUpdater` integrado do Electron e é execu
 
 ## Validação externa e bloqueios
 
-O feed público para `0.2.0/RELEASES` aponta para `Larp-0.2.1-full.nupkg`, hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082` bytes, igual ao `RELEASES` da Release `v0.2.1`. Os Setup `0.2.0` e `0.2.1` baixados correspondem aos SHA-256 da API do GitHub. Nenhum Setup foi executado: Windows Sandbox e VM não estão disponíveis e a sessão não é elevada para criar um perfil local descartável; instalação, upgrade, Pesquisa e remoção continuam bloqueados.
+O feed atual `0.2.0/RELEASES` aponta para `Larp-0.2.1-full.nupkg`, hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7` e tamanho `165719082` bytes; o arquivo `RELEASES` publicado em `v0.2.1` contém a mesma linha. Os Setup baixados em streaming coincidem com os digests da API GitHub: `0.2.0` (`166080000` bytes, SHA-256 `78f0d4c569246d313ec1e7415fc5f9ed62f2bafd30fe2b8e499a2115cab2c2f2`) e `0.2.1` (`166530560` bytes, SHA-256 `70e2d85b534ac1c5dc3b011390ac5406fd6c07289b7ca12a12303c4b9be2ea30`). Nenhum Setup ou updater foi executado: `WindowsSandbox.exe` está ausente, a máquina é um Dell G15 físico e a sessão não tem elevação para criar um perfil descartável; instalação, upgrade, Pesquisa e remoção continuam bloqueados.
 
-O harness Supabase inclui a aquisição exclusiva do lease de tela; a proteção local recusou a URL de distribuição antes de qualquer requisição. A migration `20261026222746_fix_screen_share_lease_timestamp.sql` passou em PostgreSQL 17 temporário, verificando deadline `timestamptz`, exclusão mútua, substituição após expiração e exigência de associação. Os casos remotos não foram executados porque não há URL/chave de staging nem acesso ao SQL Editor; a migration ainda não foi aplicada a nenhum projeto remoto. Não houve escrita no projeto de distribuição.
+O harness Supabase inclui aquisição exclusiva do lease de tela. A migration `20261026230136_fix_screen_share_lease_timestamp.sql` passou em PostgreSQL 17 temporário, cobrindo deadline `timestamptz`, exclusividade, substituição após expiração e exigência de associação; também foi aplicada ao projeto Supabase configurado no app. A inspeção SQL remota, somente leitura, confirmou que `acquire_group_share_lease` usa `lease_now` e mantém `expires_at` como `timestamptz`; `EXECUTE` continua permitido a `authenticated` e negado a `anon`. `npm run test:supabase` parou na preflight por falta de `LARP_TEST_SUPABASE_URL`; nenhum teste remoto de integração ou escrita de dados de teste ocorreu. A tentativa real de compartilhar ainda depende de retry no app autenticado.
 
 O app 0.2.1 empacotado abriu com perfil temporário e cloud não configurado. Capturas reais de microfone e tela foram iniciadas e encerradas pelo renderer confiável e pelo handler de display do Electron. A tela de permissão negada/reautorização e a queda/restauração do estado cloud não foram exercitadas: falta staging para ativar um grupo e o app permanece em `not-configured`.
 
-O workflow manual de release está configurado, mas o `workflow_dispatch` não foi executado: esta sessão não tem `gh`, `act` ou token GitHub disponível. Nenhuma Release nova foi criada. ICE relay, reconexão P2P e carga de seis participantes continuam pendentes; há somente um PC, e RTT/perda não são expostos pela interface atual.
+O workflow manual de release está configurado, mas o `workflow_dispatch` não foi executado: `gh` não está instalado e `GH_TOKEN`/`GITHUB_TOKEN` não estão definidos. Nenhuma Release nova foi criada. ICE relay, reconexão P2P e carga de seis participantes continuam pendentes; há somente um PC, e RTT/perda não são expostos pela interface atual.
 
 Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos, fronteiras e matriz de validação.

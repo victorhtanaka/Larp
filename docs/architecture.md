@@ -61,7 +61,7 @@ A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação
 
 ## Configuração e verificação
 
-A implantação exige Auth anônimo Supabase, migrações ordenadas, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. Projetos existentes precisam aplicar `20261026222746_fix_screen_share_lease_timestamp.sql` antes de reservar compartilhamento de tela; ela corrige `expires_at` para usar uma expressão `timestamptz`. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
+A implantação exige Auth anônimo Supabase, migrações ordenadas, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. A migration `20261026230136_fix_screen_share_lease_timestamp.sql` corrige `expires_at` para usar uma expressão `timestamptz`; ela já foi aplicada ao projeto Supabase configurado no app. Outros projetos existentes precisam aplicá-la antes de reservar compartilhamento de tela. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
 
 Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`, os sete testes de `npm test` e `npm run make` passaram; o maker gerou os artefatos Squirrel. `npm run test:supabase` exige credenciais públicas de staging isolado e pausa para a fixture expirada. O workflow de release está configurado, mas nenhuma execução GitHub Actions foi disparada nesta validação.
 
@@ -69,12 +69,12 @@ Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`
 |---|---|
 | Tipagem e testes automatizados | `npm run typecheck` e `npm test`: aprovados; sete testes locais, sem prova de rede remota |
 | `npm run make` Windows x64 | Aprovado; `RELEASES`, um `.nupkg` e `Larp-0.2.1 Setup.exe` gerados; matcher do workflow aceitou os três |
-| Feed updater e Setup publicado | Feed `0.2.0/RELEASES` aponta para hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7`, tamanho `165719082`; SHA-256 dos Setup 0.2.0/0.2.1 coincide com a API GitHub |
-| Instalação, upgrade, Pesquisa e uninstall | Bloqueados: Windows Sandbox/VM indisponíveis e sessão sem elevação; nenhum Setup foi executado |
-| Supabase RLS, convites, leases e corrida | Harness isolado cobre aquisição exclusiva da tela; migração exercitada em PostgreSQL 17 temporário (deadline, exclusividade, expiração e associação). Casos remotos não executados por falta de staging, Auth/painel e credenciais; projeto de distribuição intocado |
+| Feed updater e Setup publicado | Feed atual e `RELEASES` de `v0.2.1` coincidem em hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7` e tamanho `165719082`; Setup 0.2.0/0.2.1 baixados em streaming conferidos pelos digests SHA-256 da API (`78f0d4c569246d313ec1e7415fc5f9ed62f2bafd30fe2b8e499a2115cab2c2f2` e `70e2d85b534ac1c5dc3b011390ac5406fd6c07289b7ca12a12303c4b9be2ea30`) |
+| Instalação, upgrade, Pesquisa e uninstall | Bloqueados: sem `WindowsSandbox.exe`, máquina física e sem elevação para criar perfil descartável; nenhum Setup ou updater foi executado |
+| Supabase RLS, convites, leases e corrida | Harness isolado cobre aquisição exclusiva da tela; migration exercitada em PostgreSQL 17 temporário e aplicada ao projeto configurado. A inspeção SQL remota confirmou o tipo `timestamptz` e o uso de `lease_now`. `npm run test:supabase` parou na preflight por falta de `LARP_TEST_SUPABASE_URL`; nenhum teste remoto de integração nem escrita de dados de teste ocorreu. O retry real no app autenticado continua pendente |
 | Captura local de mídia | App empacotado 0.2.1 abriu com perfil temporário sem cloud; captura real de microfone e tela 1920×1080 passou pelos handlers Electron e foi encerrada. Fluxo de negação/reautorização e UI dependente de grupo não testados |
 | Rede, WebRTC e TURN | Não validados: sem projeto staging e sem segundo PC. Um peer `disconnected` é descartado após 12 s; ICE `failed` tenta restart e expira após 20 s. Sem prova relay |
 | Carga de seis participantes | Pendente: exige seis PCs; RTT e perda não aparecem nas métricas da interface |
-| Workflow de release | Configurado para build em tags e publicação manual; matcher local aprovado. `workflow_dispatch` não executado por falta de cliente/token GitHub; nenhuma Release nova criada |
+| Workflow de release | Configurado para build em tags e publicação manual; matcher local aprovado. `workflow_dispatch` não executado: `gh` ausente e sem `GH_TOKEN`/`GITHUB_TOKEN`; nenhuma Release nova criada |
 
-Configuração Supabase/credenciais TURN não estão incluídas no checkout. Nenhuma mutação foi feita no projeto de distribuição. Builds e capturas locais não validam comunicação entre PCs, seleção de relay, reconexão ou capacidade máxima.
+Configuração Supabase/credenciais TURN não estão incluídas no checkout. A única mutação remota desta validação foi a migration `20261026230136_fix_screen_share_lease_timestamp.sql`, aplicada para corrigir a função de lease; nenhum dado de teste foi gravado. Builds e capturas locais não validam comunicação entre PCs, seleção de relay, reconexão ou capacidade máxima.
