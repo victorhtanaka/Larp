@@ -8,6 +8,7 @@ import {
   type IdentitySigner,
   type IdentityVerifier,
   type SignedChatEnvelope,
+  type SignedProtocolEnvelope,
 } from '../src/shared/webrtc-protocol';
 import { MessageSynchronizer, type LocalMessageStore } from '../src/renderer/rtc/message-sync';
 
@@ -111,7 +112,7 @@ function createHarness() {
   const memory = createMemoryStore();
   const ordered: number[] = [];
   const protocolErrors: string[] = [];
-  const sent: Array<{ target: string; kind: string }> = [];
+  const sent: Array<{ target: string; kind: string; envelope: SignedProtocolEnvelope }> = [];
   const synchronizer = new MessageSynchronizer({
     groupId,
     localParticipantId: localId,
@@ -122,7 +123,7 @@ function createHarness() {
     getGroupMemberIds: async () => [localId, peerId],
     getMemberPublicKey: async (requestedGroup, participantId) => requestedGroup === groupId ? keys.get(participantId) : undefined,
     getPeerIds: () => [peerId],
-    sendToPeer: async (target, envelope) => { sent.push({ target, kind: envelope.kind }); },
+    sendToPeer: async (target, envelope) => { sent.push({ target, kind: envelope.kind, envelope }); },
     callbacks: {
       onOrderedMessage: (message) => ordered.push(message.sequence),
       onProtocolError: (_participantId, code) => protocolErrors.push(code),
@@ -165,4 +166,37 @@ test('persiste duplicatas idempotentes e só publica mensagens na ordem do autor
   assert.equal(harness.protocolErrors.at(-1), 'duplicate-id-conflict');
   assert.equal(harness.memory.count(), 2);
   assert.ok(harness.sent.some((entry) => entry.target === peerId && entry.kind === 'sync-request'));
+});
+
+test('notifica uma mensagem remota nova uma vez e não notifica duplicatas nem lotes de sincronização', async () => {
+  const live = createHarness();
+  const liveMessage = await createChatMessage(1, live.peerSigner);
+  await live.synchronizer.receive(peerId, JSON.stringify(liveMessage));
+  assert.deepEqual(live.ordered, [1]);
+  await live.synchronizer.receive(peerId, JSON.stringify(liveMessage));
+  assert.deepEqual(live.ordered, [1]);
+
+  const synchronized = createHarness();
+  await synchronized.synchronizer.synchronizePeer(peerId);
+  const request = synchronized.sent.find((entry) => entry.kind === 'sync-request'
+    && entry.envelope.kind === 'sync-request'
+    && entry.envelope.authorId === peerId)?.envelope;
+  assert.ok(request?.kind === 'sync-request');
+  const historyMessage = await createChatMessage(1, synchronized.peerSigner);
+  const batch = await signProtocolEnvelope({
+    version: WEBRTC_PROTOCOL_VERSION,
+    kind: 'sync-batch',
+    groupId,
+    senderId: peerId,
+    authorId: peerId,
+    requestId: request.requestId,
+    afterSequence: request.afterSequence,
+    throughSequence: request.throughSequence,
+    messages: [historyMessage],
+    complete: true,
+  }, synchronized.peerSigner);
+  await synchronized.synchronizer.receive(peerId, JSON.stringify(batch));
+  assert.deepEqual(synchronized.ordered, []);
+  await synchronized.synchronizer.receive(peerId, JSON.stringify(historyMessage));
+  assert.deepEqual(synchronized.ordered, []);
 });

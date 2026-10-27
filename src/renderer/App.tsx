@@ -772,6 +772,7 @@ function App() {
                 groupName: group.name,
                 actorName,
               });
+              void media.playMessageNotificationSound();
             }
             const displayMessage = toPeerChatMessage(message, localCloudUserId);
             setCloudMessages((previous) => previous.some((item) => item.id === displayMessage.id)
@@ -779,7 +780,9 @@ function App() {
               : [...previous, displayMessage].sort((left, right) => left.createdAt.localeCompare(right.createdAt)));
           },
           onPeerState: (peerId, state) => {
-            if (current) setPeerStates((previous) => ({ ...previous, [peerId]: state }));
+            if (!current) return;
+            setPeerStates((previous) => ({ ...previous, [peerId]: state }));
+            media.handleRemotePeerState(peerId, state);
           },
           onTrack: media.handleRemoteTrack,
           onError: (_message) => { if (current) setPeerError('Não foi possível conectar aos participantes. Tente novamente.'); },
@@ -798,7 +801,7 @@ function App() {
       mesh?.close();
       if (meshRef.current === mesh) meshRef.current = null;
     };
-  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, meshMembers, meshRetryNonce, media.handleRemoteTrack]);
+  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, meshMembers, meshRetryNonce, media.handleRemoteTrack, media.handleRemotePeerState, media.playMessageNotificationSound]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -1105,8 +1108,9 @@ function App() {
       previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: currentPeerIds };
       return;
     }
+    const nextPreviousPeerIds = new Set([...previous.peerIds].filter((peerId) => currentPeerIds.has(peerId)));
     for (const peerId of currentPeerIds) {
-      if (previous.peerIds.has(peerId)) continue;
+      if (previous.peerIds.has(peerId) || media.remotePeerStates[peerId] !== 'connected') continue;
       const actorName = profilesByUserIdRef.current.get(peerId)?.displayName?.trim()
         || `Participante · ${peerId.slice(-6).toUpperCase()}`;
       addNotification({
@@ -1117,27 +1121,31 @@ function App() {
         actorName,
       });
       void media.playCallJoinSound();
+      nextPreviousPeerIds.add(peerId);
     }
-    previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: currentPeerIds };
-  }, [activeCloudGroup?.id, activeCloudGroup?.name, addNotification, media.playCallJoinSound, media.remoteAudioPeerIds]);
+    previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: nextPreviousPeerIds };
+  }, [activeCloudGroup?.id, activeCloudGroup?.name, addNotification, media.playCallJoinSound, media.remoteAudioPeerIds, media.remotePeerStates]);
   const callParticipants = [
     ...(media.callActive && localCloudUserId ? [{
       id: localCloudUserId,
       label: 'Você',
       profile: profilesByUserId.get(localCloudUserId),
       isLocal: true,
+      isReconnecting: false,
       isSpeaking: media.speakingParticipantIds.includes(localCloudUserId),
     }] : []),
     ...media.remoteAudioPeerIds
-      .filter((peerId) => peerStates[peerId] === 'connected')
       .map((peerId) => {
         const profile = profilesByUserId.get(peerId);
+        const peerState = media.remotePeerStates[peerId];
+        const isReconnecting = peerState === 'connecting' || peerState === 'disconnected' || peerState === 'failed';
         return {
           id: peerId,
           label: profile?.displayName?.trim() || `Participante · ${peerId.slice(-6).toUpperCase()}`,
           profile,
           isLocal: false,
-          isSpeaking: media.speakingParticipantIds.includes(peerId),
+          isReconnecting,
+          isSpeaking: !isReconnecting && media.speakingParticipantIds.includes(peerId),
         };
       }),
   ];
@@ -1290,28 +1298,60 @@ function App() {
             />
           ) : (
             <>
-          {(media.displayStream || media.remoteVideoStream) && (
-            <div className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`}>
+          {(media.displayStream || media.remoteVideoStream || callParticipants.length > 0) && (
+            <section className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`} aria-label="Palco da chamada">
               <div className="screen-stage-header">
                 <div className="screen-stage-heading">
-                  <strong>{media.displayStream ? `Você está compartilhando · ${media.shareSourceName}` : 'Tela compartilhada ao vivo'}</strong>
+                  <strong>{media.displayStream
+                    ? `Você está compartilhando · ${media.shareSourceName}`
+                    : media.remoteVideoStream ? 'Tela compartilhada ao vivo' : 'Chamada de voz'}</strong>
+                  {callParticipants.length > 0 && (
+                    <span>{callParticipants.length} {callParticipants.length === 1 ? 'participante na chamada' : 'participantes na chamada'}</span>
+                  )}
                 </div>
-                <button
-                  ref={screenViewerToggleRef}
-                  type="button"
-                  className="screen-stage-toggle"
-                  aria-label={screenViewerExpanded ? 'Sair da tela cheia em janela' : 'Exibir transmissão em tela cheia na janela'}
-                  aria-pressed={screenViewerExpanded}
-                  aria-keyshortcuts={screenViewerExpanded ? 'Escape' : undefined}
-                  title={screenViewerExpanded ? 'Restaurar janela anterior (Esc)' : 'Maximizar sem ocultar a barra de tarefas'}
-                  onClick={() => changeScreenViewerMode(!screenViewerExpanded)}
-                >
-                  <Icon name={screenViewerExpanded ? 'shrink' : 'expand'} size={16} />
-                  <span>{screenViewerExpanded ? 'Sair da tela cheia' : 'Tela cheia em janela'}</span>
-                </button>
+                {(media.displayStream || media.remoteVideoStream) && (
+                  <button
+                    ref={screenViewerToggleRef}
+                    type="button"
+                    className="screen-stage-toggle"
+                    aria-label={screenViewerExpanded ? 'Sair da tela cheia em janela' : 'Exibir transmissão em tela cheia na janela'}
+                    aria-pressed={screenViewerExpanded}
+                    aria-keyshortcuts={screenViewerExpanded ? 'Escape' : undefined}
+                    title={screenViewerExpanded ? 'Restaurar janela anterior (Esc)' : 'Maximizar sem ocultar a barra de tarefas'}
+                    onClick={() => changeScreenViewerMode(!screenViewerExpanded)}
+                  >
+                    <Icon name={screenViewerExpanded ? 'shrink' : 'expand'} size={16} />
+                    <span>{screenViewerExpanded ? 'Sair da tela cheia' : 'Tela cheia em janela'}</span>
+                  </button>
+                )}
               </div>
-              <video ref={media.screenVideoRef} muted={Boolean(media.displayStream)} autoPlay playsInline aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'} />
-            </div>
+              <div className={`call-stage-layout${media.displayStream || media.remoteVideoStream ? ' call-stage-layout-screen' : ''}${(media.displayStream || media.remoteVideoStream) && callParticipants.length > 0 ? ' call-stage-layout-sharing' : ''}`}>
+                {(media.displayStream || media.remoteVideoStream) && (
+                  <div className="call-stage-screen">
+                    <video ref={media.screenVideoRef} muted={Boolean(media.displayStream)} autoPlay playsInline aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'} />
+                  </div>
+                )}
+                {callParticipants.length > 0 && (
+                  <div className={`call-stage-participants${media.displayStream || media.remoteVideoStream ? ' call-stage-participants-side' : ''}`} aria-label="Participantes na chamada">
+                    {callParticipants.map((participant) => (
+                      <article
+                        className={`call-stage-participant${participant.isSpeaking ? ' call-stage-participant-speaking' : ''}${participant.isReconnecting ? ' call-stage-participant-reconnecting' : ''}`}
+                        key={participant.id}
+                        aria-label={`${participant.label}, ${participant.isReconnecting ? 'reconectando' : participant.isSpeaking ? 'falando' : 'conectado'}`}
+                      >
+                        <ProfileAvatar
+                          className="call-stage-participant-avatar"
+                          profile={participant.profile}
+                          initials={profileInitials(participant.profile?.displayName, participant.isLocal ? 'PC' : participant.id.slice(-2).toUpperCase())}
+                        />
+                        <strong className="call-stage-participant-name">{participant.label}</strong>
+                        <span className="call-stage-participant-status">{participant.isReconnecting ? 'Reconectando' : participant.isSpeaking ? 'Falando' : 'Conectado'}</span>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
           )}
           {cloudStatus.state === 'connecting' ? (
             <div className="loading-state"><span className="loading-dot" />Carregando grupos…</div>
@@ -1365,26 +1405,6 @@ function App() {
                   ? `Chamada ativa · ${callParticipants.length} ${callParticipants.length === 1 ? 'participante' : 'participantes'} na chamada`
                   : activeCloudGroup ? `${connectedPeerLabel} · voz desligada` : 'Conecte-se a um grupo para iniciar a chamada'}</span>
               </div>
-              {callParticipants.length > 0 && (
-                <div className="call-participants" aria-label="Participantes na chamada">
-                  <span className="call-participants-label">NA CHAMADA</span>
-                  {callParticipants.map((participant) => (
-                    <span
-                      className={`call-participant${participant.isSpeaking ? ' call-participant-speaking' : ''}`}
-                      key={participant.id}
-                      title={participant.isSpeaking ? `${participant.label} está falando` : participant.label}
-                      aria-label={participant.isSpeaking ? `${participant.label} está falando` : participant.label}
-                    >
-                      <ProfileAvatar
-                        className="call-participant-avatar"
-                        profile={participant.profile}
-                        initials={profileInitials(participant.profile?.displayName, participant.isLocal ? 'PC' : participant.id.slice(-2).toUpperCase())}
-                      />
-                      <span className="call-participant-name">{participant.label}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
 
             <div className="call-actions">
@@ -1409,18 +1429,32 @@ function App() {
                 <Icon name="headphones" size={17} /><span>{media.playbackMuted ? 'Áudio silenciado' : 'Saída de áudio'}</span>
               </button>
               <label className="playback-volume-control">
-                <span>Volume</span>
+                <span>Voz</span>
                 <input
                   type="range"
                   min={0}
                   max={100}
                   step={1}
-                  value={Math.round(media.playbackVolume * 100)}
+                  value={Math.round(media.voicePlaybackVolume * 100)}
                   disabled={!media.mediaReady}
-                  aria-label="Volume do áudio recebido"
-                  onChange={(event) => media.setPlaybackVolume(Number(event.currentTarget.value) / 100)}
+                  aria-label="Volume da voz"
+                  onChange={(event) => media.setVoicePlaybackVolume(Number(event.currentTarget.value) / 100)}
                 />
-                <output aria-hidden="true">{Math.round(media.playbackVolume * 100)}%</output>
+                <output aria-hidden="true">{Math.round(media.voicePlaybackVolume * 100)}%</output>
+              </label>
+              <label className="playback-volume-control">
+                <span>Transmissão</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(media.transmissionPlaybackVolume * 100)}
+                  disabled={!media.mediaReady || !media.remoteTransmissionAudioAvailable}
+                  aria-label="Volume da transmissão"
+                  onChange={(event) => media.setTransmissionPlaybackVolume(Number(event.currentTarget.value) / 100)}
+                />
+                <output aria-hidden="true">{Math.round(media.transmissionPlaybackVolume * 100)}%</output>
               </label>
 
               <button type="button" className="call-control device-control" disabled={!activeCloudGroup || !media.mediaReady} onClick={openAudioSettings}>Dispositivos</button>
@@ -1788,7 +1822,8 @@ function App() {
           </section>
         </div>
       )}
-      <audio ref={media.audioElementRef} className="sr-only" autoPlay aria-label="Áudio remoto" />
+      <audio ref={media.voiceAudioElementRef} className="sr-only" autoPlay aria-label="Áudio remoto de voz" />
+      <audio ref={media.transmissionAudioElementRef} className="sr-only" autoPlay aria-label="Áudio remoto da transmissão" />
     </main>
   );
 }

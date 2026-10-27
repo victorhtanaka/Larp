@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MediaSession, supportsNoiseSuppression } from '../src/renderer/media/session';
 import { loadNoiseSuppression, saveNoiseSuppression } from '../src/renderer/media/noise-suppression';
-import { loadPlaybackVolume, savePlaybackVolume } from '../src/renderer/media/playback-volume';
+import {
+  loadTransmissionPlaybackVolume,
+  loadVoicePlaybackVolume,
+  saveTransmissionPlaybackVolume,
+  saveVoicePlaybackVolume,
+} from '../src/renderer/media/playback-volume';
 
 
 test('persists and restores noise suppression, defaulting on malformed data', () => {
@@ -55,41 +60,77 @@ test('threads noise suppression through permission and selected microphone const
   }
 });
 
-test('clamps playback volume and applies it to the audio output', () => {
+test('applies independent clamped voice and transmission volumes with a shared mute', () => {
   const session = new MediaSession({
     mediaDevices: {} as MediaDevices,
     mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
   });
-  const output = { muted: false, volume: 1 } as HTMLAudioElement;
+  const voice = { muted: false, volume: 1 } as HTMLAudioElement;
+  const transmission = { muted: false, volume: 1 } as HTMLAudioElement;
 
-  session.setPlaybackVolume(0.35);
-  session.attachOutput(output);
-  assert.equal(output.volume, 0.35);
+  session.setVoicePlaybackVolume(0.35);
+  session.setTransmissionPlaybackVolume(0.7);
+  session.attachOutput(voice, transmission);
+  assert.equal(voice.volume, 0.35);
+  assert.equal(transmission.volume, 0.7);
 
-  session.setPlaybackVolume(1.4);
-  assert.equal(output.volume, 1);
-  session.setPlaybackVolume(-0.2);
-  assert.equal(output.volume, 0);
-  session.setPlaybackVolume(Number.NaN);
-  assert.equal(output.volume, 0);
+  session.setVoicePlaybackVolume(1.4);
+  session.setTransmissionPlaybackVolume(-0.2);
+  assert.equal(voice.volume, 1);
+  assert.equal(transmission.volume, 0);
+  session.setVoicePlaybackVolume(Number.NaN);
+  assert.equal(voice.volume, 1);
+
+  session.setPlaybackMuted(true);
+  assert.equal(voice.muted, true);
+  assert.equal(transmission.muted, true);
 });
 
-test('persiste e restaura o volume no armazenamento local do perfil', () => {
+test('persists independent voice and transmission volumes and tolerates malformed or unavailable storage', () => {
   const values = new Map<string, string>();
   const storage: Pick<Storage, 'getItem' | 'setItem'> = {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => { values.set(key, value); },
   };
-
-  savePlaybackVolume(storage, 0.42);
-  assert.equal(loadPlaybackVolume(storage), 0.42);
-  savePlaybackVolume(storage, 1.5);
-  assert.equal(loadPlaybackVolume(storage), 1);
+  saveVoicePlaybackVolume(storage, 0.42);
+  saveTransmissionPlaybackVolume(storage, 0.73);
+  assert.equal(loadVoicePlaybackVolume(storage), 0.42);
+  assert.equal(loadTransmissionPlaybackVolume(storage), 0.73);
+  assert.equal(values.get('larp-playback-volume'), '0.42');
+  assert.equal(values.get('larp-transmission-playback-volume'), '0.73');
+  saveVoicePlaybackVolume(storage, 1.5);
+  assert.equal(loadVoicePlaybackVolume(storage), 1);
   values.set('larp-playback-volume', 'invalid');
-  assert.equal(loadPlaybackVolume(storage), 1);
+  values.set('larp-transmission-playback-volume', 'invalid');
+  assert.equal(loadVoicePlaybackVolume(storage), 1);
+  assert.equal(loadTransmissionPlaybackVolume(storage), 1);
+  const unavailable = {
+    getItem: () => { throw new Error('storage denied'); },
+    setItem: () => { throw new Error('storage denied'); },
+  };
+  assert.equal(loadVoicePlaybackVolume(unavailable), 1);
+  assert.equal(loadTransmissionPlaybackVolume(unavailable), 1);
+  saveVoicePlaybackVolume(unavailable, 0.2);
+  saveTransmissionPlaybackVolume(unavailable, 0.3);
 });
 
-test('retoma a saída suspensa e toca o tom usado ao entrar alguém na chamada', async () => {
+test('applies one selected output device to both playback channels', async () => {
+  const voiceSinkIds: string[] = [];
+  const transmissionSinkIds: string[] = [];
+  const voice = Object.assign({ muted: false, volume: 1 }, { setSinkId: async (sinkId: string) => { voiceSinkIds.push(sinkId); } }) as unknown as HTMLAudioElement;
+  const transmission = Object.assign({ muted: false, volume: 1 }, { setSinkId: async (sinkId: string) => { transmissionSinkIds.push(sinkId); } }) as unknown as HTMLAudioElement;
+  const session = new MediaSession({
+    mediaDevices: { enumerateDevices: async () => [{ kind: 'audiooutput', deviceId: 'speaker-1' }] } as unknown as MediaDevices,
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+  session.attachOutput(voice, transmission);
+
+  assert.equal(await session.selectAudioOutput('speaker-1'), 'available');
+  assert.deepEqual(voiceSinkIds, ['speaker-1']);
+  assert.deepEqual(transmissionSinkIds, ['speaker-1']);
+});
+
+test('retoma a saída suspensa e executa tons curtos de chamada e mensagem', async () => {
   let frequency = 0;
   let stopTime = -1;
   let resumeCount = 0;
@@ -135,6 +176,9 @@ test('retoma a saída suspensa e toca o tom usado ao entrar alguém na chamada',
     assert.equal(resumeCount, 1);
     assert.equal(frequency, 880);
     assert.equal(stopTime, 0.22);
+    assert.equal(await session.playSafeTone(660, 120), true);
+    assert.equal(frequency, 660);
+    assert.equal(stopTime, 0.12);
   } finally {
     await session.close();
     if (originalAudioContext) Object.defineProperty(globalThis, 'AudioContext', originalAudioContext);

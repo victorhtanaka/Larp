@@ -2,10 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SelectedDisplaySource } from '../../shared/contracts';
 import { MediaQualityController, type VideoContentPreference } from './quality';
 import { MediaSession, supportsNoiseSuppression, type MediaDeviceOption } from './session';
-import type { PeerMesh } from '../rtc/peer-mesh';
-import { DEFAULT_PLAYBACK_VOLUME, loadPlaybackVolume, normalizePlaybackVolume, savePlaybackVolume } from './playback-volume';
+import type { PeerConnectionStatus, PeerMesh } from '../rtc/peer-mesh';
+import {
+  DEFAULT_TRANSMISSION_PLAYBACK_VOLUME,
+  DEFAULT_VOICE_PLAYBACK_VOLUME,
+  loadTransmissionPlaybackVolume,
+  loadVoicePlaybackVolume,
+  normalizePlaybackVolume,
+  saveTransmissionPlaybackVolume,
+  saveVoicePlaybackVolume,
+} from './playback-volume';
 import { DEFAULT_NOISE_SUPPRESSION, loadNoiseSuppression, saveNoiseSuppression } from './noise-suppression';
-import { RemoteAudioParticipants } from './remote-audio-participants';
+import { RemoteAudioParticipants, type RemoteAudioSourceChange } from './remote-audio-participants';
 import { VoiceActivityMonitor } from './voice-activity';
 
 interface MediaControllerOptions {
@@ -14,6 +22,7 @@ interface MediaControllerOptions {
   connectedPeerIds: readonly string[];
   localParticipantId?: string;
 }
+
 export function useMediaController({ groupId, mesh, connectedPeerIds, localParticipantId }: MediaControllerOptions) {
   const [mediaReady, setMediaReady] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceOption[]>([]);
@@ -24,12 +33,20 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const [callActive, setCallActive] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
   const [playbackMuted, setPlaybackMuted] = useState(false);
-  const [playbackVolume, setPlaybackVolumeState] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_PLAYBACK_VOLUME;
+  const [voicePlaybackVolume, setVoicePlaybackVolumeState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_VOICE_PLAYBACK_VOLUME;
     try {
-      return loadPlaybackVolume(window.localStorage);
+      return loadVoicePlaybackVolume(window.localStorage);
     } catch {
-      return DEFAULT_PLAYBACK_VOLUME;
+      return DEFAULT_VOICE_PLAYBACK_VOLUME;
+    }
+  });
+  const [transmissionPlaybackVolume, setTransmissionPlaybackVolumeState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_TRANSMISSION_PLAYBACK_VOLUME;
+    try {
+      return loadTransmissionPlaybackVolume(window.localStorage);
+    } catch {
+      return DEFAULT_TRANSMISSION_PLAYBACK_VOLUME;
     }
   });
   const [noiseSuppressionEnabled, setNoiseSuppressionState] = useState(() => {
@@ -54,18 +71,28 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const [shareStarting, setShareStarting] = useState(false);
   const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
+  const [remoteTransmissionAudioAvailable, setRemoteTransmissionAudioAvailable] = useState(false);
 
   const [remoteAudioPeerIds, setRemoteAudioPeerIds] = useState<string[]>([]);
   const [speakingParticipantIds, setSpeakingParticipantIds] = useState<string[]>([]);
+  const [remotePeerStates, setRemotePeerStates] = useState<Record<string, PeerConnectionStatus>>({});
   const sessionRef = useRef<MediaSession | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
-  const remoteAudioStreamRef = useRef<MediaStream | null>(null);
+  const remoteVoiceAudioStreamRef = useRef<MediaStream | null>(null);
+  const remoteTransmissionAudioStreamRef = useRef<MediaStream | null>(null);
+  const remoteVideoStreamsByPeerRef = useRef(new Map<string, MediaStream>());
   const voiceActivityRef = useRef<VoiceActivityMonitor | null>(null);
   const remoteVideoStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioParticipantsRef = useRef(new RemoteAudioParticipants());
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const voiceAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const transmissionAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const currentMediaContextRef = useRef({ groupId, mesh });
+  currentMediaContextRef.current = { groupId, mesh };
+  const sessionOwnerRef = useRef<{ session: MediaSession; groupId?: string; mesh: PeerMesh } | null>(null);
+  const callOperationIdRef = useRef(0);
+  const shareOperationIdRef = useRef(0);
   const shareGroupIdRef = useRef<string | null>(null);
   const microphoneTestTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const shareStartingRef = useRef(false);
@@ -74,6 +101,49 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const qualityControllerRef = useRef(new MediaQualityController());
 
   callActiveRef.current = callActive;
+  const isCurrentSession = useCallback((session: MediaSession) => {
+    const owner = sessionOwnerRef.current;
+    return Boolean(owner
+      && owner.session === session
+      && sessionRef.current === session
+      && currentMediaContextRef.current.groupId === owner.groupId
+      && currentMediaContextRef.current.mesh === owner.mesh);
+  }, []);
+
+  const refreshRemoteAudioOutputs = useCallback(() => {
+    const voiceStream = remoteVoiceAudioStreamRef.current;
+    const transmissionStream = remoteTransmissionAudioStreamRef.current;
+    const voiceOutput = voiceAudioElementRef.current;
+    const transmissionOutput = transmissionAudioElementRef.current;
+    if (voiceOutput) {
+      if (voiceOutput.srcObject !== voiceStream) voiceOutput.srcObject = voiceStream;
+      if (voiceStream?.getAudioTracks().some((track) => track.readyState === 'live')) {
+        void voiceOutput.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
+      }
+    }
+    if (transmissionOutput) {
+      if (transmissionOutput.srcObject !== transmissionStream) transmissionOutput.srcObject = transmissionStream;
+      if (transmissionStream?.getAudioTracks().some((track) => track.readyState === 'live')) {
+        void transmissionOutput.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a transmissão.'));
+      }
+    }
+    setRemoteTransmissionAudioAvailable(Boolean(transmissionStream?.getAudioTracks().some((track) => track.readyState === 'live')));
+  }, []);
+
+  const clearRemoteAudioChannels = useCallback(() => {
+    for (const record of remoteAudioParticipantsRef.current.records) {
+      if (record.source === 'voice') voiceActivityRef.current?.removeTrack(record.track);
+    }
+    remoteAudioParticipantsRef.current.clear();
+    remoteVideoStreamsByPeerRef.current.clear();
+    remoteVoiceAudioStreamRef.current = null;
+    remoteTransmissionAudioStreamRef.current = null;
+    setRemoteAudioPeerIds([]);
+    setRemotePeerStates({});
+    setRemoteTransmissionAudioAvailable(false);
+    if (voiceAudioElementRef.current) voiceAudioElementRef.current.srcObject = null;
+    if (transmissionAudioElementRef.current) transmissionAudioElementRef.current.srcObject = null;
+  }, []);
   useEffect(() => {
     if (!groupId || !mesh) {
       voiceActivityRef.current = null;
@@ -103,39 +173,44 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     try {
       await window.larp.releaseScreenShare(leaseGroupId);
     } catch {
-      setShareError('Não foi possível finalizar o compartilhamento agora. A liberação será automática.');
+      if (currentMediaContextRef.current.groupId === leaseGroupId) {
+        setShareError('Não foi possível finalizar o compartilhamento agora. A liberação será automática.');
+      }
     }
   }, []);
 
   const stopScreenShare = useCallback(async () => {
-    await sessionRef.current?.stopDisplayShare();
+    const session = sessionRef.current;
+    const leaseGroupId = shareGroupIdRef.current;
+    shareOperationIdRef.current += 1;
+    await session?.stopDisplayShare();
+    if (session && !isCurrentSession(session)) return;
     displayStreamRef.current = null;
     setDisplayStream(null);
     setShareActive(false);
     setShareSourceName('');
-    await releaseShareLease();
-  }, [releaseShareLease]);
+    await releaseShareLease(leaseGroupId ?? undefined);
+  }, [releaseShareLease, isCurrentSession]);
 
   useEffect(() => {
     if (!groupId || !mesh) {
       setMediaReady(false);
+      setAudioBusy(false);
       setNoiseSuppressionSupported(false);
       setCallActive(false);
       setMicMuted(false);
       for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
-      for (const track of remoteAudioStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
       setSpeakingParticipantIds([]);
       microphoneStreamRef.current = null;
       displayStreamRef.current = null;
-      remoteAudioStreamRef.current = null;
-      remoteAudioParticipantsRef.current.clear();
-      setRemoteAudioPeerIds([]);
+      clearRemoteAudioChannels();
       setDisplayStream(null);
       setShareActive(false);
       setShareSourceName('');
+      setShareStarting(false);
+      shareStartingRef.current = false;
       setRemoteVideoStream(null);
       remoteVideoStreamRef.current = null;
-      if (audioElementRef.current) audioElementRef.current.srcObject = null;
       return;
     }
 
@@ -154,6 +229,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       },
       onDeviceRemoved: () => undefined,
       onDisplayEnded: () => {
+        if (!isCurrentSession(session)) return;
         displayStreamRef.current = null;
         setDisplayStream(null);
         setShareActive(false);
@@ -161,14 +237,19 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
         void releaseShareLease(groupId);
       },
     });
+    sessionOwnerRef.current = { session, groupId, mesh };
     sessionRef.current = session;
     setNoiseSuppressionSupported(supportsNoiseSuppression());
-    if (audioElementRef.current) session.attachOutput(audioElementRef.current);
-    session.setPlaybackVolume(playbackVolume);
+    if (voiceAudioElementRef.current && transmissionAudioElementRef.current) {
+      session.attachOutput(voiceAudioElementRef.current, transmissionAudioElementRef.current);
+    }
+    session.setVoicePlaybackVolume(voicePlaybackVolume);
+    session.setTransmissionPlaybackVolume(transmissionPlaybackVolume);
     session.setPlaybackMuted(playbackMuted);
     setMediaReady(true);
     setAudioError('');
     const removeDeviceListener = session.onDeviceRemovedEvent(({ kind }) => {
+      if (!isCurrentSession(session)) return;
       setAudioError(kind === 'audioinput'
         ? 'O microfone foi desconectado. A chamada foi interrompida.'
         : 'A saída de áudio selecionada foi removida. O áudio usará a saída padrão.');
@@ -186,20 +267,25 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       microphoneTestTimerRef.current = undefined;
       void session.stopMicrophoneTest();
       removeDeviceListener();
-      if (sessionRef.current === session) sessionRef.current = null;
+      if (sessionOwnerRef.current?.session === session) {
+        sessionOwnerRef.current = null;
+        if (sessionRef.current === session) sessionRef.current = null;
+        callOperationIdRef.current += 1;
+        shareOperationIdRef.current += 1;
+        shareStartingRef.current = false;
+        setShareStarting(false);
+      }
       void session.close();
       const leaseGroupId = shareGroupIdRef.current;
       if (leaseGroupId) void releaseShareLease(leaseGroupId);
       for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
-      for (const track of remoteAudioStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
       microphoneStreamRef.current = null;
       displayStreamRef.current = null;
-      remoteAudioStreamRef.current = null;
-      remoteAudioParticipantsRef.current.clear();
-      setRemoteAudioPeerIds([]);
+      clearRemoteAudioChannels();
       remoteVideoStreamRef.current = null;
       setMediaReady(false);
       setCallActive(false);
+      setAudioBusy(false);
       setMicrophoneTestActive(false);
       setMicrophoneLevel(0);
       setShareActive(false);
@@ -207,7 +293,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       setDisplayStream(null);
       setRemoteVideoStream(null);
     };
-  }, [groupId, mesh, releaseShareLease]);
+  }, [groupId, mesh, releaseShareLease, clearRemoteAudioChannels, isCurrentSession]);
 
   useEffect(() => {
     sessionRef.current?.setMicrophoneMuted(micMuted);
@@ -215,70 +301,118 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   }, [micMuted, playbackMuted]);
 
   useEffect(() => {
-    if (!mediaReady || !audioElementRef.current || !sessionRef.current) return;
+    if (!mediaReady || !voiceAudioElementRef.current || !transmissionAudioElementRef.current || !sessionRef.current) return;
     const session = sessionRef.current;
-    session.attachOutput(audioElementRef.current);
+    session.attachOutput(voiceAudioElementRef.current, transmissionAudioElementRef.current);
     session.setPlaybackMuted(playbackMuted);
+    session.setVoicePlaybackVolume(voicePlaybackVolume);
+    session.setTransmissionPlaybackVolume(transmissionPlaybackVolume);
     if (selectedOutputId) {
-      void session.selectAudioOutput(selectedOutputId, audioElementRef.current).then((state) => {
+      void session.selectAudioOutput(selectedOutputId).then((state) => {
         if (state === 'available') return;
         setSelectedOutputId('');
         setAudioError('A saída selecionada não está mais disponível; o áudio usará a saída padrão.');
       });
     }
-  }, [mediaReady, playbackMuted, selectedOutputId]);
+    refreshRemoteAudioOutputs();
+  }, [mediaReady, playbackMuted, selectedOutputId, voicePlaybackVolume, transmissionPlaybackVolume, refreshRemoteAudioOutputs]);
 
-  useEffect(() => {
-    if (!mediaReady) return;
-    sessionRef.current?.setPlaybackVolume(playbackVolume);
-  }, [mediaReady, playbackVolume]);
+  const refreshRemoteAudioPeerIds = useCallback(() => {
+    const next = [...remoteAudioParticipantsRef.current.peerIds];
+    setRemoteAudioPeerIds((current) => current.length === next.length && current.every((peerId, index) => peerId === next[index])
+      ? current
+      : next);
+  }, []);
 
-  useEffect(() => {
-    const audio = audioElementRef.current;
-    if (!audio) return;
-    const stream = remoteAudioStreamRef.current;
-    audio.srcObject = stream;
-    if (stream) void audio.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
-  }, [remoteVideoStream, mediaReady]);
+  const applyRemoteAudioSourceChange = useCallback((change: RemoteAudioSourceChange, added = false) => {
+    const { record, previousSource, source } = change;
+    if (previousSource !== source) {
+      const previousStreamRef = previousSource === 'voice' ? remoteVoiceAudioStreamRef : remoteTransmissionAudioStreamRef;
+      const previousStream = previousStreamRef.current;
+      previousStream?.removeTrack(record.track);
+      if (previousStream && previousStream.getAudioTracks().length === 0) previousStreamRef.current = null;
+      if (previousSource === 'voice') voiceActivityRef.current?.removeTrack(record.track);
+    }
+    if (source === 'voice' && (previousSource !== 'voice' || added)) {
+      voiceActivityRef.current?.addTrack(record.peerId, record.track);
+    }
+    if (change.peerJoined || change.peerLeft) refreshRemoteAudioPeerIds();
+    const streamRef = source === 'voice' ? remoteVoiceAudioStreamRef : remoteTransmissionAudioStreamRef;
+    const outputStream = streamRef.current ?? new MediaStream();
+    streamRef.current = outputStream;
+    if (!outputStream.getAudioTracks().includes(record.track)) outputStream.addTrack(record.track);
+    refreshRemoteAudioOutputs();
+  }, [refreshRemoteAudioOutputs, refreshRemoteAudioPeerIds]);
 
-  const onRemoteTrack = useCallback((peerId: string, track: MediaStreamTrack) => {
+  const removeRemoteAudioTrack = useCallback((peerId: string, track: MediaStreamTrack) => {
+    const { record, peerLeft } = remoteAudioParticipantsRef.current.removeTrack(peerId, track);
+    if (!record) return;
+    const streamRef = record.source === 'voice' ? remoteVoiceAudioStreamRef : remoteTransmissionAudioStreamRef;
+    const outputStream = streamRef.current;
+    outputStream?.removeTrack(record.track);
+    if (outputStream && outputStream.getAudioTracks().length === 0) streamRef.current = null;
+    if (record.source === 'voice') voiceActivityRef.current?.removeTrack(record.track);
+    if (peerLeft) refreshRemoteAudioPeerIds();
+    refreshRemoteAudioOutputs();
+  }, [refreshRemoteAudioOutputs, refreshRemoteAudioPeerIds]);
+
+  const handleRemotePeerState = useCallback((peerId: string, state: PeerConnectionStatus) => {
+    if (state !== 'closed') {
+      remoteAudioParticipantsRef.current.setPeerState(peerId, state);
+      setRemotePeerStates((current) => current[peerId] === state ? current : { ...current, [peerId]: state });
+      refreshRemoteAudioPeerIds();
+      return;
+    }
+
+    for (const record of remoteAudioParticipantsRef.current.removePeer(peerId)) {
+      const streamRef = record.source === 'voice' ? remoteVoiceAudioStreamRef : remoteTransmissionAudioStreamRef;
+      const outputStream = streamRef.current;
+      outputStream?.removeTrack(record.track);
+      if (outputStream && outputStream.getAudioTracks().length === 0) streamRef.current = null;
+      if (record.source === 'voice') voiceActivityRef.current?.removeTrack(record.track);
+    }
+    const videoStream = remoteVideoStreamsByPeerRef.current.get(peerId);
+    remoteVideoStreamsByPeerRef.current.delete(peerId);
+    if (videoStream && remoteVideoStreamRef.current === videoStream) {
+      remoteVideoStreamRef.current = null;
+      setRemoteVideoStream(null);
+    }
+    setRemotePeerStates((current) => {
+      if (!(peerId in current)) return current;
+      const next = { ...current };
+      delete next[peerId];
+      return next;
+    });
+    refreshRemoteAudioPeerIds();
+    refreshRemoteAudioOutputs();
+  }, [refreshRemoteAudioOutputs, refreshRemoteAudioPeerIds]);
+
+  const onRemoteTrack = useCallback((peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) => {
     if (track.kind === 'audio') {
       if (track.readyState !== 'live') return;
-      const addition = remoteAudioParticipantsRef.current.add(peerId, track);
-      if (addition === 'duplicate') return;
-      voiceActivityRef.current?.addTrack(peerId, track);
-      if (addition === 'peer-joined') {
-        setRemoteAudioPeerIds([...remoteAudioParticipantsRef.current.peerIds]);
-      }
-      const stream = remoteAudioStreamRef.current ?? new MediaStream();
-      remoteAudioStreamRef.current = stream;
-      if (!stream.getTracks().includes(track)) stream.addTrack(track);
-      if (audioElementRef.current) {
-        audioElementRef.current.srcObject = stream;
-        void audioElementRef.current.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
-      }
-      track.addEventListener('ended', () => {
-        voiceActivityRef.current?.removeTrack(track);
-        stream.removeTrack(track);
-        if (stream.getTracks().length === 0) remoteAudioStreamRef.current = null;
-        if (remoteAudioParticipantsRef.current.remove(peerId, track) === 'peer-left') {
-          setRemoteAudioPeerIds([...remoteAudioParticipantsRef.current.peerIds]);
-        }
-      }, { once: true });
+      const { record, added } = remoteAudioParticipantsRef.current.addAudioTrack(peerId, track, streams);
+      const source = remoteAudioParticipantsRef.current.isTransmission(record) ? 'transmission' : 'voice';
+      applyRemoteAudioSourceChange(remoteAudioParticipantsRef.current.setSource(record, source), added);
+      if (added) track.addEventListener('ended', () => removeRemoteAudioTrack(peerId, track), { once: true });
       return;
     }
     if (track.kind !== 'video') return;
+    for (const change of remoteAudioParticipantsRef.current.addVideoStreams(peerId, streams)) {
+      applyRemoteAudioSourceChange(change);
+    }
     const stream = new MediaStream([track]);
+    remoteVideoStreamsByPeerRef.current.set(peerId, stream);
     remoteVideoStreamRef.current = stream;
     setRemoteVideoStream(stream);
     track.addEventListener('ended', () => {
       stream.removeTrack(track);
+      if (remoteVideoStreamsByPeerRef.current.get(peerId) === stream) remoteVideoStreamsByPeerRef.current.delete(peerId);
       if (remoteVideoStreamRef.current === stream) {
         remoteVideoStreamRef.current = null;
         setRemoteVideoStream(null);
       }
     }, { once: true });
-  }, []);
+  }, [applyRemoteAudioSourceChange, removeRemoteAudioTrack]);
 
   useEffect(() => {
     const video = screenVideoRef.current;
@@ -288,7 +422,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     if (stream) void video.play().catch(() => setShareError('A prévia de vídeo não pôde ser iniciada.'));
   }, [displayStream, remoteVideoStream]);
 
-  const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack, isVoiceTrack: boolean) => {
+  const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack) => {
     if (!mesh) return;
     const item = mesh.getMediaSenders().find((candidate) => candidate.peerId === peerId && candidate.sender.track === track);
     if (!item) return;
@@ -305,24 +439,48 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     } catch {
       // Codec preference is optional; WebRTC still negotiates its compatible default list.
     }
-    if (track.kind === 'audio' && isVoiceTrack) {
+    if (track.kind === 'audio') {
       try {
-        await controller.configureVoiceSender(sender);
+        await controller.configureAudioSender(sender);
       } catch {
         // Keep the browser's default congestion-controlled audio parameters.
       }
     }
   }, [mesh]);
 
-  const attachStreamToPeer = useCallback(async (peerId: string, stream: MediaStream) => {
-    const session = sessionRef.current;
-    if (!session) return;
+  const attachStreamToPeer = useCallback(async (
+    peerId: string,
+    stream: MediaStream,
+    session = sessionRef.current,
+    isOperationCurrent?: () => boolean,
+  ) => {
+    const isCurrent = () => Boolean(session && isCurrentSession(session) && isOperationCurrent?.() !== false);
+    if (!session || !isCurrent()) return false;
     for (const track of stream.getTracks()) {
+      if (!isCurrent()) return false;
       if (track.readyState !== 'live') continue;
-      await session.attachTrack(peerId, track, stream);
-      await configureCodecPreference(peerId, track, stream === microphoneStreamRef.current);
+      try {
+        await session.attachTrack(peerId, track, stream);
+      } catch (error) {
+        try {
+          await session.detachTrack(peerId, track);
+        } catch {
+          // The operation caller still performs full rollback for its stream.
+        }
+        throw error;
+      }
+      if (!isCurrent()) {
+        await session.detachTrack(peerId, track);
+        return false;
+      }
+      await configureCodecPreference(peerId, track);
+      if (!isCurrent()) {
+        await session.detachTrack(peerId, track);
+        return false;
+      }
     }
-  }, [configureCodecPreference]);
+    return isCurrent();
+  }, [configureCodecPreference, isCurrentSession]);
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -341,21 +499,6 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   }, [mesh, connectedPeerIds, callActive, shareActive, attachStreamToPeer, mediaReady]);
 
 
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!session || !mesh) return;
-    const streams = [callActive ? microphoneStreamRef.current : null, shareActive ? displayStreamRef.current : null]
-      .filter((stream): stream is MediaStream => Boolean(stream));
-    let current = true;
-    for (const peerId of connectedPeerIds) {
-      for (const stream of streams) {
-        void attachStreamToPeer(peerId, stream).catch(() => {
-          if (current) setAudioError('Não foi possível compartilhar o áudio com o participante.');
-        });
-      }
-    }
-    return () => { current = false; };
-  }, [mesh, connectedPeerIds, callActive, shareActive, attachStreamToPeer, mediaReady]);
 
   useEffect(() => {
     const controller = new MediaQualityController({
@@ -495,10 +638,11 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
 
   const selectAudioOutput = useCallback(async (deviceId: string) => {
     const session = sessionRef.current;
-    const element = audioElementRef.current;
-    if (!session || !element) return;
+    const voiceOutput = voiceAudioElementRef.current;
+    const transmissionOutput = transmissionAudioElementRef.current;
+    if (!session || !voiceOutput || !transmissionOutput) return;
     setAudioBusy(true);
-    const state = await session.selectAudioOutput(deviceId, element);
+    const state = await session.selectAudioOutput(deviceId);
     setAudioBusy(false);
     if (state === 'available') {
       setSelectedOutputId(deviceId);
@@ -574,12 +718,41 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       setAudioError('Selecione um microfone antes de entrar na chamada.');
       return false;
     }
+    if (audioBusy || !isCurrentSession(session)) return false;
+
+    const operationId = ++callOperationIdRef.current;
+    const isOperationCurrent = () => operationId === callOperationIdRef.current && isCurrentSession(session);
+    const voiceActivity = voiceActivityRef.current;
+    const attachedPeerIds = new Set<string>();
+    const voiceActivityTracks: MediaStreamTrack[] = [];
+    let stream = microphoneStreamRef.current;
+    let createdStream = false;
+    const rollback = async () => {
+      for (const peerId of attachedPeerIds) {
+        for (const track of stream?.getTracks() ?? []) {
+          try {
+            await session.detachTrack(peerId, track);
+          } catch {
+            // Continue rolling back the remaining peer tracks.
+          }
+        }
+      }
+      for (const track of voiceActivityTracks) voiceActivity?.removeTrack(track);
+      if (createdStream) {
+        if (microphoneStreamRef.current === stream) microphoneStreamRef.current = null;
+        await session.stopMicrophone();
+      }
+    };
+
     setAudioBusy(true);
     setAudioError('');
     try {
-      let stream = microphoneStreamRef.current;
       if (!stream?.getAudioTracks().some((track) => track.readyState === 'live')) {
         const capture = await session.selectMicrophone(selectedMicrophoneId, noiseSuppressionEnabled);
+        if (!isOperationCurrent()) {
+          await session.stopMicrophone();
+          return false;
+        }
         if (capture.state !== 'active' || !capture.stream) {
           setAudioError(capture.state === 'permission-denied'
             ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
@@ -590,29 +763,57 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
         }
         stream = capture.stream;
         microphoneStreamRef.current = stream;
+        createdStream = true;
+      }
+      if (!stream || !isOperationCurrent()) {
+        await rollback();
+        return false;
       }
       session.setMicrophoneMuted(micMuted);
       if (localParticipantId) {
-        for (const track of stream.getAudioTracks()) voiceActivityRef.current?.addTrack(localParticipantId, track);
+        for (const track of stream.getAudioTracks()) {
+          voiceActivity?.addTrack(localParticipantId, track);
+          voiceActivityTracks.push(track);
+        }
       }
-      for (const peerId of connectedPeerIds) await attachStreamToPeer(peerId, stream);
+      for (const peerId of connectedPeerIds) {
+        if (!isOperationCurrent()) {
+          await rollback();
+          return false;
+        }
+        attachedPeerIds.add(peerId);
+        if (!await attachStreamToPeer(peerId, stream, session, isOperationCurrent)) {
+          await rollback();
+          return false;
+        }
+      }
+      if (!isOperationCurrent()) {
+        await rollback();
+        return false;
+      }
       setCallActive(true);
       return true;
     } catch {
-      setAudioError('Não foi possível entrar na chamada.');
+      await rollback();
+      if (isOperationCurrent()) setAudioError('Não foi possível entrar na chamada.');
       return false;
     } finally {
-      setAudioBusy(false);
+      if (isOperationCurrent()) setAudioBusy(false);
     }
-  }, [groupId, mesh, connectedPeerIds, selectedMicrophoneId, micMuted, attachStreamToPeer, noiseSuppressionEnabled, localParticipantId]);
+  }, [groupId, mesh, connectedPeerIds, selectedMicrophoneId, micMuted, attachStreamToPeer, noiseSuppressionEnabled, localParticipantId, audioBusy, isCurrentSession]);
 
   const stopCall = useCallback(async () => {
+    const session = sessionRef.current;
+    const stream = microphoneStreamRef.current;
+    const voiceActivity = voiceActivityRef.current;
+    callOperationIdRef.current += 1;
+    setAudioBusy(false);
     setCallActive(false);
     setMicMuted(false);
-    sessionRef.current?.setMicrophoneMuted(false);
-    await sessionRef.current?.stopMicrophone();
-    for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
-    microphoneStreamRef.current = null;
+    session?.setMicrophoneMuted(false);
+    await session?.stopMicrophone();
+    for (const track of stream?.getAudioTracks() ?? []) voiceActivity?.removeTrack(track);
+    if (microphoneStreamRef.current === stream) microphoneStreamRef.current = null;
   }, []);
 
   const toggleMicrophoneMuted = useCallback(() => {
@@ -629,13 +830,24 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       return !muted;
     });
   }, []);
-  const setPlaybackVolume = useCallback((volume: number) => {
+  const setVoicePlaybackVolume = useCallback((volume: number) => {
     if (!Number.isFinite(volume)) return;
     const normalized = normalizePlaybackVolume(volume);
-    setPlaybackVolumeState(normalized);
-    sessionRef.current?.setPlaybackVolume(normalized);
+    setVoicePlaybackVolumeState(normalized);
+    sessionRef.current?.setVoicePlaybackVolume(normalized);
     try {
-      savePlaybackVolume(window.localStorage, normalized);
+      saveVoicePlaybackVolume(window.localStorage, normalized);
+    } catch {
+      // The volume still applies until this window closes.
+    }
+  }, []);
+  const setTransmissionPlaybackVolume = useCallback((volume: number) => {
+    if (!Number.isFinite(volume)) return;
+    const normalized = normalizePlaybackVolume(volume);
+    setTransmissionPlaybackVolumeState(normalized);
+    sessionRef.current?.setTransmissionPlaybackVolume(normalized);
+    try {
+      saveTransmissionPlaybackVolume(window.localStorage, normalized);
     } catch {
       // The volume still applies until this window closes.
     }
@@ -674,56 +886,129 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       setShareError('A conexão com um grupo ativo é necessária para compartilhar a tela.');
       return false;
     }
+    if (!isCurrentSession(session)) return false;
+
+    const operationId = ++shareOperationIdRef.current;
+    const isOperationCurrent = () => operationId === shareOperationIdRef.current && isCurrentSession(session);
+    const attachedPeerIds = new Set<string>();
+    let stream: MediaStream | undefined;
+    let reservedLease = false;
+    const releaseOperationLease = async () => {
+      if (!reservedLease) return;
+      reservedLease = false;
+      if (shareGroupIdRef.current === groupId) {
+        await releaseShareLease(groupId);
+      } else {
+        try {
+          await window.larp.releaseScreenShare(groupId);
+        } catch {
+          // The old group owns this lease; do not surface it in a new group.
+        }
+      }
+    };
+    const rollback = async () => {
+      if (stream) {
+        for (const peerId of attachedPeerIds) {
+          for (const track of stream.getTracks()) {
+            try {
+              await session.detachTrack(peerId, track);
+            } catch {
+              // Continue rolling back the remaining peer tracks.
+            }
+          }
+        }
+      }
+      await session.stopDisplayShare();
+      await releaseOperationLease();
+    };
+
     shareStartingRef.current = true;
     setShareStarting(true);
     setShareError('');
     try {
       const reserved = await window.larp.acquireScreenShare(groupId);
+      if (!isOperationCurrent()) {
+        if (reserved) {
+          try {
+            await window.larp.releaseScreenShare(groupId);
+          } catch {
+            // The stale operation must not change the new group's UI.
+          }
+        }
+        return false;
+      }
       if (!reserved) {
         setShareError('Outra pessoa já está compartilhando a tela deste grupo.');
         return false;
       }
+      reservedLease = true;
       shareGroupIdRef.current = groupId;
+
       const capture = await session.startDisplayShare(source, { audio: includeSystemAudio });
-      if (capture.state !== 'active' || !capture.stream) {
+      stream = capture.stream;
+      if (!isOperationCurrent()) {
+        await rollback();
+        return false;
+      }
+      if (capture.state !== 'active' || !stream) {
         setShareError(capture.state === 'permission-denied'
           ? 'A permissão para compartilhar a tela foi negada. Verifique as permissões deste computador.'
           : capture.state === 'unsupported'
             ? 'O compartilhamento de tela não está disponível neste computador.'
             : 'Não foi possível capturar a tela escolhida.');
-        await session.stopDisplayShare();
-        await releaseShareLease(groupId);
+        await rollback();
         return false;
       }
-      for (const track of capture.stream.getVideoTracks()) track.contentHint = screenMode === 'text' ? 'text' : 'motion';
-      for (const peerId of mesh.connectedPeerIds) await attachStreamToPeer(peerId, capture.stream);
-      displayStreamRef.current = capture.stream;
-      setDisplayStream(capture.stream);
+      for (const track of stream.getVideoTracks()) track.contentHint = screenMode === 'text' ? 'text' : 'motion';
+      for (const peerId of mesh.connectedPeerIds) {
+        if (!isOperationCurrent()) {
+          await rollback();
+          return false;
+        }
+        attachedPeerIds.add(peerId);
+        if (!await attachStreamToPeer(peerId, stream, session, isOperationCurrent)) {
+          await rollback();
+          return false;
+        }
+      }
+      if (!isOperationCurrent()) {
+        await rollback();
+        return false;
+      }
+      reservedLease = false;
+      displayStreamRef.current = stream;
+      setDisplayStream(stream);
       setShareSourceName(source.name);
       setShareActive(true);
       return true;
     } catch {
-      setShareError('Não foi possível iniciar o compartilhamento. Verifique as permissões e tente novamente.');
-      await session.stopDisplayShare();
-      await releaseShareLease(groupId);
+      await rollback();
+      if (isOperationCurrent()) {
+        setShareError('Não foi possível iniciar o compartilhamento. Verifique as permissões e tente novamente.');
+      }
       return false;
     } finally {
-      shareStartingRef.current = false;
-      setShareStarting(false);
+      if (isOperationCurrent()) {
+        shareStartingRef.current = false;
+        setShareStarting(false);
+      }
     }
-  }, [groupId, mesh, includeSystemAudio, screenMode, attachStreamToPeer, releaseShareLease, shareActive]);
+  }, [groupId, mesh, includeSystemAudio, screenMode, attachStreamToPeer, releaseShareLease, shareActive, isCurrentSession]);
 
   const setVideoBudgetMbps = useCallback((value: number) => {
     if (Number.isFinite(value)) setVideoBudgetMbpsState(Math.min(20, Math.max(1, value)));
   }, []);
 
   const handleRemoteTrack = useCallback((peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) => {
-    void streams;
-    onRemoteTrack(peerId, track);
+    onRemoteTrack(peerId, track, streams);
   }, [onRemoteTrack]);
 
   const playCallJoinSound = useCallback(async () => {
     await sessionRef.current?.playSafeTone(880, 220);
+  }, []);
+
+  const playMessageNotificationSound = useCallback(async () => {
+    await sessionRef.current?.playSafeTone(660, 120);
   }, []);
 
   return {
@@ -736,12 +1021,16 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     audioBusy,
     audioError,
     remoteAudioPeerIds,
+    remotePeerStates,
     speakingParticipantIds,
     callActive,
     micMuted,
     playbackMuted,
-    playbackVolume,
-    setPlaybackVolume,
+    voicePlaybackVolume,
+    setVoicePlaybackVolume,
+    transmissionPlaybackVolume,
+    setTransmissionPlaybackVolume,
+    remoteTransmissionAudioAvailable,
     noiseSuppressionEnabled,
     noiseSuppressionSupported,
     setNoiseSuppression,
@@ -762,10 +1051,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     displayStream,
     shareStarting,
     remoteVideoStream,
-    audioElementRef,
+    voiceAudioElementRef,
+    transmissionAudioElementRef,
     screenVideoRef,
     handleRemoteTrack,
+    handleRemotePeerState,
     playCallJoinSound,
+    playMessageNotificationSound,
     refreshAudioDevices,
     selectMicrophone,
     selectAudioOutput,

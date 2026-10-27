@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MediaQualityController, type QualityPeer } from '../src/renderer/media/quality';
 
-function createSender(kind: 'audio' | 'video') {
+function createSender(kind: 'audio' | 'video', maxBitrate?: number) {
   const track = { kind, contentHint: '' } as MediaStreamTrack;
-  let parameters = { encodings: [{}] } as RTCRtpSendParameters;
+  let parameters = { encodings: [maxBitrate === undefined ? {} : { maxBitrate }] } as RTCRtpSendParameters;
   let setCalls = 0;
   const sender = {
     track,
@@ -55,15 +55,19 @@ test('limita bitrate pela rota medida e reduz FPS quando o codificador informa p
   assert.equal(constrained.parameters.encodings?.[0]?.scaleResolutionDownBy, 1.5);
   assert.equal(other.parameters.encodings?.[0]?.maxFramerate, 30);
 });
-test('amplia o teto do envio de voz sem alterar transmissores de vídeo', async () => {
+test('limita o envio de áudio de microfone e tela a 96 kb/s sem alterar vídeo', async () => {
   const controller = new MediaQualityController();
-  const audio = createSender('audio');
+  const microphone = createSender('audio');
+  const screenAudio = createSender('audio', 128_000);
   const video = createSender('video');
 
-  assert.equal(await controller.configureVoiceSender(audio.sender), true);
-  assert.equal(audio.parameters.encodings?.[0]?.maxBitrate, 64_000);
-  assert.equal(audio.setCalls, 1);
-  assert.equal(await controller.configureVoiceSender(video.sender), false);
+  assert.equal(await controller.configureAudioSender(microphone.sender), true);
+  assert.equal(microphone.parameters.encodings?.[0]?.maxBitrate, 96_000);
+  assert.equal(microphone.setCalls, 1);
+  assert.equal(await controller.configureAudioSender(screenAudio.sender), true);
+  assert.equal(screenAudio.parameters.encodings?.[0]?.maxBitrate, 96_000);
+  assert.equal(screenAudio.setCalls, 1);
+  assert.equal(await controller.configureAudioSender(video.sender), false);
   assert.equal(video.setCalls, 0);
 });
 

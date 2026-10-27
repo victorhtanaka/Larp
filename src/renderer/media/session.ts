@@ -95,7 +95,8 @@ export class MediaSession {
   private selectedOutputId?: string;
   private microphone?: MediaStream;
   private displayStream?: MediaStream;
-  private output?: HTMLAudioElement;
+  private voiceOutput?: HTMLAudioElement;
+  private transmissionOutput?: HTMLAudioElement;
   private microphoneTestContext?: AudioContext;
   private microphoneTestAnalyser?: AnalyserNode;
   private microphoneTestSource?: MediaStreamAudioSourceNode;
@@ -104,7 +105,8 @@ export class MediaSession {
   private toneNodes: AudioScheduledSourceNode[] = [];
   private micMuted = false;
   private playbackMuted = false;
-  private playbackVolume = 1;
+  private voicePlaybackVolume = 1;
+  private transmissionPlaybackVolume = 1;
   private closed = false;
   private readonly pageHideHandler = () => { void this.close(); };
   private readonly deviceListeners = new Set<(event: { kind: MediaDeviceKind; deviceId: string }) => void>();
@@ -185,48 +187,47 @@ export class MediaSession {
     }
   }
 
-  async selectAudioOutput(deviceId: string, element?: HTMLAudioElement): Promise<DeviceEnumeration['state']> {
+  async selectAudioOutput(deviceId: string): Promise<DeviceEnumeration['state']> {
     if (this.closed || !this.mediaDevices) return 'unavailable';
-    const target = element ?? this.output;
-    if (!target || typeof target.setSinkId !== 'function') return 'unavailable';
-    if (!deviceId) {
-      try {
-        await target.setSinkId('');
+    const targets = this.outputElements();
+    if (targets.length === 0 || targets.some((target) => typeof target.setSinkId !== 'function')) return 'unavailable';
+    if (deviceId) {
+      const listed = await this.enumerateDevices('audiooutput');
+      if (listed.state !== 'available') return listed.state;
+      if (!listed.devices.some((device) => device.deviceId === deviceId)) {
         this.selectedOutputId = undefined;
-        this.output = target;
-        target.muted = this.playbackMuted;
-        target.volume = this.playbackVolume;
-        return 'available';
-      } catch (error) {
-        return errorName(error) === 'NotAllowedError' ? 'permission-denied' : 'unavailable';
+        return 'unavailable';
       }
     }
-    const listed = await this.enumerateDevices('audiooutput');
-    if (listed.state !== 'available') return listed.state;
-    if (!listed.devices.some((device) => device.deviceId === deviceId)) {
-      this.selectedOutputId = undefined;
-      return 'unavailable';
-    }
+    const previousSinkId = this.selectedOutputId ?? '';
     try {
-      await target.setSinkId(deviceId);
-      this.selectedOutputId = deviceId;
-      this.output = target;
-      target.muted = this.playbackMuted;
-      target.volume = this.playbackVolume;
+      await Promise.all(targets.map((target) => target.setSinkId(deviceId)));
+      this.selectedOutputId = deviceId || undefined;
       return 'available';
     } catch (error) {
+      await Promise.all(targets.map((target) => target.setSinkId(previousSinkId).catch(() => undefined)));
       return errorName(error) === 'NotAllowedError' ? 'permission-denied' : 'unavailable';
     }
   }
 
-  attachOutput(element: HTMLAudioElement): void {
+  attachOutput(voiceElement: HTMLAudioElement, transmissionElement?: HTMLAudioElement): void {
     if (this.closed) return;
-    this.output = element;
-    element.muted = this.playbackMuted;
-    element.volume = this.playbackVolume;
-    if (this.selectedOutputId && typeof element.setSinkId === 'function') {
-      void element.setSinkId(this.selectedOutputId).catch(() => { this.selectedOutputId = undefined; });
+    this.voiceOutput = voiceElement;
+    this.transmissionOutput = transmissionElement;
+    for (const [element, volume] of [
+      [voiceElement, this.voicePlaybackVolume],
+      ...(transmissionElement ? [[transmissionElement, this.transmissionPlaybackVolume] as const] : []),
+    ] as const) {
+      element.muted = this.playbackMuted;
+      element.volume = volume;
+      if (this.selectedOutputId && typeof element.setSinkId === 'function') {
+        void element.setSinkId(this.selectedOutputId).catch(() => { this.selectedOutputId = undefined; });
+      }
     }
+  }
+
+  private outputElements(): HTMLAudioElement[] {
+    return [this.voiceOutput, this.transmissionOutput].filter((element): element is HTMLAudioElement => Boolean(element));
   }
 
   setMicrophoneMuted(muted: boolean): void {
@@ -236,14 +237,21 @@ export class MediaSession {
 
   setPlaybackMuted(muted: boolean): void {
     this.playbackMuted = muted;
-    if (this.output) this.output.muted = muted;
+    for (const output of this.outputElements()) output.muted = muted;
   }
 
-  setPlaybackVolume(volume: number): void {
+  setVoicePlaybackVolume(volume: number): void {
     if (!Number.isFinite(volume)) return;
-    this.playbackVolume = Math.min(1, Math.max(0, volume));
-    if (this.output) this.output.volume = this.playbackVolume;
+    this.voicePlaybackVolume = Math.min(1, Math.max(0, volume));
+    if (this.voiceOutput) this.voiceOutput.volume = this.voicePlaybackVolume;
   }
+
+  setTransmissionPlaybackVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    this.transmissionPlaybackVolume = Math.min(1, Math.max(0, volume));
+    if (this.transmissionOutput) this.transmissionOutput.volume = this.transmissionPlaybackVolume;
+  }
+
 
 
   async startDisplayShare(source: SelectedDisplaySource | undefined, options: { audio?: boolean } = {}): Promise<CaptureResult> {
@@ -408,8 +416,12 @@ export class MediaSession {
       this.toneContext = undefined;
       if (context.state !== 'closed') await context.close().catch(() => undefined);
     }
-    if (this.output) { this.output.pause(); this.output.srcObject = null; }
-    this.output = undefined;
+    for (const output of this.outputElements()) {
+      output.pause();
+      output.srcObject = null;
+    }
+    this.voiceOutput = undefined;
+    this.transmissionOutput = undefined;
     this.deviceListeners.clear();
   }
 
@@ -458,7 +470,9 @@ export class MediaSession {
     if (this.selectedOutputId && outputs.state === 'available' && !outputs.devices.some((d) => d.deviceId === this.selectedOutputId)) {
       const removed = this.selectedOutputId;
       this.selectedOutputId = undefined;
-      if (this.output && typeof this.output.setSinkId === 'function') void this.output.setSinkId('').catch(() => undefined);
+      for (const output of this.outputElements()) {
+        if (typeof output.setSinkId === 'function') void output.setSinkId('').catch(() => undefined);
+      }
       this.notifyRemoved('audiooutput', removed);
     }
   }

@@ -240,7 +240,11 @@ export class MessageSynchronizer {
     }
   }
 
-  private async receiveChat(peerId: string, message: SignedChatEnvelope, requestMissing = true): Promise<void> {
+  private async receiveChat(
+    peerId: string,
+    message: SignedChatEnvelope,
+    options: { requestMissing?: boolean; notify?: boolean } = {},
+  ): Promise<void> {
     if (!this.contiguousSequenceByAuthor.has(message.senderId)) {
       const persistedSequence = await this.options.store.getHighestContiguousSequence(this.options.groupId, message.senderId);
       if (!Number.isSafeInteger(persistedSequence) || persistedSequence < 0) {
@@ -273,7 +277,7 @@ export class MessageSynchronizer {
         }
       }));
     }
-    this.acceptForOrdering(message, result === 'inserted');
+    this.acceptForOrdering(message, (options.notify ?? true) && result === 'inserted');
     if (this.options.getPeerIds().includes(message.senderId)) {
       const acknowledgement = await signProtocolEnvelope({
         version: WEBRTC_PROTOCOL_VERSION,
@@ -285,7 +289,7 @@ export class MessageSynchronizer {
       }, this.options.signer) as SignedAckEnvelope;
       await this.options.sendToPeer(message.senderId, acknowledgement);
     }
-    if (requestMissing) await this.requestMissing(message.senderId);
+    if (options.requestMissing ?? true) await this.requestMissing(message.senderId);
   }
 
   private acceptForOrdering(message: SignedChatEnvelope, notify: boolean): void {
@@ -475,7 +479,7 @@ export class MessageSynchronizer {
       }
     }
     try {
-      for (const message of batch.messages) await this.receiveChat(peerId, message, false);
+      for (const message of batch.messages) await this.receiveChat(peerId, message, { requestMissing: false, notify: false });
     } finally {
       this.pendingRequests.delete(batch.requestId);
     }

@@ -1,33 +1,151 @@
-export type RemoteAudioTrackAddition = 'peer-joined' | 'track-added' | 'duplicate';
-export type RemoteAudioTrackRemoval = 'peer-left' | 'track-removed' | 'unknown';
+import type { PeerConnectionStatus } from '../rtc/peer-mesh';
+
+export type RemoteAudioSource = 'voice' | 'transmission';
+
+export interface RemoteAudioTrackRecord {
+  peerId: string;
+  track: MediaStreamTrack;
+  streamIds: Set<string>;
+  source: RemoteAudioSource;
+}
+
+export interface RemoteAudioSourceChange {
+  record: RemoteAudioTrackRecord;
+  previousSource: RemoteAudioSource;
+  source: RemoteAudioSource;
+  peerJoined: boolean;
+  peerLeft: boolean;
+}
 
 export class RemoteAudioParticipants {
-  private readonly tracksByPeer = new Map<string, Set<MediaStreamTrack>>();
+  private readonly tracksByPeer = new Map<string, Map<MediaStreamTrack, RemoteAudioTrackRecord>>();
+  private readonly videoStreamIdsByPeer = new Map<string, Set<string>>();
+  private readonly peerStates = new Map<string, PeerConnectionStatus>();
+  private readonly participatingPeers = new Set<string>();
 
   get peerIds(): readonly string[] {
-    return [...this.tracksByPeer.keys()];
+    return [...this.participatingPeers];
   }
 
-  add(peerId: string, track: MediaStreamTrack): RemoteAudioTrackAddition {
-    const tracks = this.tracksByPeer.get(peerId);
-    if (tracks?.has(track)) return 'duplicate';
-    if (tracks) {
-      tracks.add(track);
-      return 'track-added';
+  get records(): readonly RemoteAudioTrackRecord[] {
+    return [...this.tracksByPeer.values()].flatMap((tracks) => [...tracks.values()]);
+  }
+
+  getPeerState(peerId: string): PeerConnectionStatus | undefined {
+    return this.peerStates.get(peerId);
+  }
+
+  setPeerState(peerId: string, state: PeerConnectionStatus): void {
+    this.peerStates.set(peerId, state);
+    this.updateVoiceParticipation(peerId);
+  }
+
+  addAudioTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]): { record: RemoteAudioTrackRecord; added: boolean } {
+    const existingTracks = this.tracksByPeer.get(peerId);
+    const tracks = existingTracks ?? new Map<MediaStreamTrack, RemoteAudioTrackRecord>();
+    if (!existingTracks) this.tracksByPeer.set(peerId, tracks);
+    let record = tracks.get(track);
+    const added = !record;
+    if (!record) {
+      record = { peerId, track, streamIds: new Set<string>(), source: 'voice' };
+      tracks.set(track, record);
     }
-    this.tracksByPeer.set(peerId, new Set([track]));
-    return 'peer-joined';
+    for (const stream of streams) {
+      record.streamIds.add(stream.id);
+      if (stream.getVideoTracks().length > 0) this.addVideoStreamId(peerId, stream.id);
+    }
+    return { record, added };
   }
 
-  remove(peerId: string, track: MediaStreamTrack): RemoteAudioTrackRemoval {
+  addVideoStreams(peerId: string, streams: readonly MediaStream[]): RemoteAudioSourceChange[] {
+    for (const stream of streams) this.addVideoStreamId(peerId, stream.id);
+    const changes: RemoteAudioSourceChange[] = [];
+    for (const record of this.tracksByPeer.get(peerId)?.values() ?? []) {
+      if (!this.isTransmission(record)) continue;
+      const change = this.setSource(record, 'transmission');
+      if (change.previousSource !== change.source) changes.push(change);
+    }
+    return changes;
+  }
+
+  isTransmission(record: RemoteAudioTrackRecord): boolean {
+    const videoStreamIds = this.videoStreamIdsByPeer.get(record.peerId);
+    if (!videoStreamIds) return false;
+    for (const streamId of record.streamIds) {
+      if (videoStreamIds.has(streamId)) return true;
+    }
+    return false;
+  }
+
+  setSource(record: RemoteAudioTrackRecord, source: RemoteAudioSource): RemoteAudioSourceChange {
+    const wasParticipating = this.participatingPeers.has(record.peerId);
+    const previousSource = record.source;
+    record.source = source;
+    this.updateVoiceParticipation(record.peerId);
+    const isParticipating = this.participatingPeers.has(record.peerId);
+    return {
+      record,
+      previousSource,
+      source,
+      peerJoined: !wasParticipating && isParticipating,
+      peerLeft: wasParticipating && !isParticipating,
+    };
+  }
+
+  removeTrack(peerId: string, track: MediaStreamTrack): { record?: RemoteAudioTrackRecord; peerLeft: boolean } {
     const tracks = this.tracksByPeer.get(peerId);
-    if (!tracks?.delete(track)) return 'unknown';
-    if (tracks.size > 0) return 'track-removed';
+    const record = tracks?.get(track);
+    if (!tracks || !record) return { peerLeft: false };
+    const wasParticipating = this.participatingPeers.has(peerId);
+    tracks.delete(track);
+    if (tracks.size === 0) this.tracksByPeer.delete(peerId);
+    this.updateVoiceParticipation(peerId);
+    return { record, peerLeft: wasParticipating && !this.participatingPeers.has(peerId) };
+  }
+
+  removePeer(peerId: string): RemoteAudioTrackRecord[] {
+    const records = [...(this.tracksByPeer.get(peerId)?.values() ?? [])];
     this.tracksByPeer.delete(peerId);
-    return 'peer-left';
+    this.videoStreamIdsByPeer.delete(peerId);
+    this.peerStates.delete(peerId);
+    this.participatingPeers.delete(peerId);
+    return records;
   }
 
   clear(): void {
     this.tracksByPeer.clear();
+    this.videoStreamIdsByPeer.clear();
+    this.peerStates.clear();
+    this.participatingPeers.clear();
+  }
+
+  private addVideoStreamId(peerId: string, streamId: string): void {
+    let ids = this.videoStreamIdsByPeer.get(peerId);
+    if (!ids) {
+      ids = new Set();
+      this.videoStreamIdsByPeer.set(peerId, ids);
+    }
+    ids.add(streamId);
+  }
+
+  private updateVoiceParticipation(peerId: string): void {
+    const tracks = this.tracksByPeer.get(peerId);
+    let hasVoiceTrack = false;
+    if (tracks) {
+      for (const record of tracks.values()) {
+        if (record.source === 'voice') {
+          hasVoiceTrack = true;
+          break;
+        }
+      }
+    }
+    if (hasVoiceTrack) {
+      this.participatingPeers.add(peerId);
+      return;
+    }
+    const state = this.peerStates.get(peerId);
+    if (state !== 'disconnected' && state !== 'failed' && state !== 'connecting') {
+      this.participatingPeers.delete(peerId);
+    }
   }
 }
