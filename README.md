@@ -92,7 +92,7 @@ Quando a função não fornece credenciais TURN (por configuração, limite ou s
 - Sinalização privada autenticada por membro, envelopes versionados e assinados, negociação WebRTC com ofertas simultâneas, lotes ICE e reinício/reconexão.
 - Malha WebRTC para até cinco pares remotos por participante; canal de dados confiável e ordenado para chat e sincronização de histórico disponível.
 - Persistência SQLite antes do envio, assinaturas Ed25519, deduplicação, verificação de sequência, confirmações locais e sincronização de lacunas por lotes. Não existe armazenamento central das mensagens.
-- Microfone e saída selecionáveis, teste local, silenciar microfone/reprodução, Opus, cancelamento de eco e redução de ruído.
+- Microfone e saída selecionáveis, teste local, silenciar microfone/reprodução, Opus quando compatível, cancelamento de eco e redução de ruído; o envio de voz permite até 64 kb/s por participante, sujeito ao controle de congestionamento WebRTC, e o volume recebido é ajustável e salvo localmente neste PC.
 - Escolha explícita de monitor/janela; áudio do sistema desativado por padrão; reserva única de compartilhamento com expiração e liberação ao parar.
 - Visualização da transmissão em tela cheia na janela, maximizando sem ocultar a barra de tarefas; `Esc` restaura o estado e o tamanho anteriores da janela.
 - Modos Movimento e Texto, codecs negociados (AV1/VP9/H.264/VP8 conforme suporte), orçamento total padrão de 20 Mb/s e teto de 8 Mb/s por conexão; métricas de resolução, FPS, codec, upload e caminho observado.

@@ -55,3 +55,15 @@ test('limita bitrate pela rota medida e reduz FPS quando o codificador informa p
   assert.equal(constrained.parameters.encodings?.[0]?.scaleResolutionDownBy, 1.5);
   assert.equal(other.parameters.encodings?.[0]?.maxFramerate, 30);
 });
+test('amplia o teto do envio de voz sem alterar transmissores de vídeo', async () => {
+  const controller = new MediaQualityController();
+  const audio = createSender('audio');
+  const video = createSender('video');
+
+  assert.equal(await controller.configureVoiceSender(audio.sender), true);
+  assert.equal(audio.parameters.encodings?.[0]?.maxBitrate, 64_000);
+  assert.equal(audio.setCalls, 1);
+  assert.equal(await controller.configureVoiceSender(video.sender), false);
+  assert.equal(video.setCalls, 0);
+});
+

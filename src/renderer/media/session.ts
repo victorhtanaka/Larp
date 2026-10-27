@@ -94,6 +94,7 @@ export class MediaSession {
   private toneNodes: AudioScheduledSourceNode[] = [];
   private micMuted = false;
   private playbackMuted = false;
+  private playbackVolume = 1;
   private closed = false;
   private readonly pageHideHandler = () => { void this.close(); };
   private readonly deviceListeners = new Set<(event: { kind: MediaDeviceKind; deviceId: string }) => void>();
@@ -184,6 +185,7 @@ export class MediaSession {
         this.selectedOutputId = undefined;
         this.output = target;
         target.muted = this.playbackMuted;
+        target.volume = this.playbackVolume;
         return 'available';
       } catch (error) {
         return errorName(error) === 'NotAllowedError' ? 'permission-denied' : 'unavailable';
@@ -200,6 +202,7 @@ export class MediaSession {
       this.selectedOutputId = deviceId;
       this.output = target;
       target.muted = this.playbackMuted;
+      target.volume = this.playbackVolume;
       return 'available';
     } catch (error) {
       return errorName(error) === 'NotAllowedError' ? 'permission-denied' : 'unavailable';
@@ -210,6 +213,7 @@ export class MediaSession {
     if (this.closed) return;
     this.output = element;
     element.muted = this.playbackMuted;
+    element.volume = this.playbackVolume;
     if (this.selectedOutputId && typeof element.setSinkId === 'function') {
       void element.setSinkId(this.selectedOutputId).catch(() => { this.selectedOutputId = undefined; });
     }
@@ -224,6 +228,13 @@ export class MediaSession {
     this.playbackMuted = muted;
     if (this.output) this.output.muted = muted;
   }
+
+  setPlaybackVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    this.playbackVolume = Math.min(1, Math.max(0, volume));
+    if (this.output) this.output.volume = this.playbackVolume;
+  }
+
 
   async startDisplayShare(source: SelectedDisplaySource | undefined, options: { audio?: boolean } = {}): Promise<CaptureResult> {
     if (this.closed || !this.displaySourceProvider) return { state: 'unsupported' };

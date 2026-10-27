@@ -230,6 +230,13 @@ button:disabled { cursor: not-allowed; }
 .call-status-dot { width: 7px; height: 7px; background: var(--subtle); }
 .call-actions { display: flex; align-items: center; gap: 5px; }
 .call-control, .call-join { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 8px; color: var(--muted); background: var(--panel-raised); border: 1px solid var(--border); border-radius: 5px; font-size: var(--type-control); }
+.playback-volume-control { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 32px; padding: 0 8px; color: var(--muted); background: var(--panel-raised); border: 1px solid var(--border); border-radius: 5px; font-size: var(--type-control); white-space: nowrap; }
+.playback-volume-control input { width: 76px; height: 24px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.playback-volume-control input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.playback-volume-control input:disabled { cursor: not-allowed; opacity: .7; }
+.playback-volume-control output { min-width: 2.4em; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+.playback-volume-control:focus-within { border-color: var(--accent); }
+
 .call-control:not(:disabled), .call-join:not(:disabled) { cursor: pointer; }
 .call-control:hover:not(:disabled), .dialog-secondary:hover:not(:disabled) { background: var(--panel-soft); border-color: var(--accent); }
 .call-control:disabled { color: var(--subtle); opacity: .75; }

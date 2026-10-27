@@ -44,9 +44,10 @@ export interface PeerMediaStats {
 const unavailable = <T>(): Metric<T> => ({ value: null, source: 'unavailable' });
 const measured = <T>(value: T): Metric<T> => ({ value, source: 'measured' });
 const incoming = <T>(value: T | null): Metric<T> => ({ value, source: value === null ? 'unavailable' : 'incoming' });
+const VOICE_MAX_BITRATE_BPS = 64_000;
 const cpuScale: Record<CpuPressure, number> = { low: 1, moderate: 0.78, high: 0.52, critical: 0.3, unknown: 1 };
 
-/** Allocates only video sender budgets; audio sender parameters are never modified. */
+/** Allocates video budgets; voice sender caps are configured independently. */
 export class MediaQualityController {
   readonly totalVideoBitrate: number;
   readonly maxVideoBitratePerPeer: number;
@@ -142,6 +143,22 @@ export class MediaQualityController {
     transceiver.setCodecPreferences(preferences);
     return true;
   }
+  /** Allows higher-fidelity voice where the route permits; WebRTC still controls congestion. */
+  async configureVoiceSender(sender: RTCRtpSender): Promise<boolean> {
+    if (sender.track?.kind !== 'audio') return false;
+    const parameters = sender.getParameters();
+    if (parameters.encodings.length === 0) return false;
+    let changed = false;
+    for (const encoding of parameters.encodings) {
+      if ((encoding.maxBitrate ?? 0) >= VOICE_MAX_BITRATE_BPS) continue;
+      encoding.maxBitrate = VOICE_MAX_BITRATE_BPS;
+      changed = true;
+    }
+    if (!changed) return false;
+    await sender.setParameters(parameters);
+    return true;
+  }
+
 
   /** Collects outgoing sender and selected ICE path telemetry where the browser exposes it. */
   async getPeerStats(peer: QualityPeer, incomingStats?: Partial<PeerMediaStats['incoming']>): Promise<PeerMediaStats> {

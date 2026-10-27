@@ -3,13 +3,13 @@ import type { SelectedDisplaySource } from '../../shared/contracts';
 import { MediaQualityController, type VideoContentPreference } from './quality';
 import { MediaSession, type MediaDeviceOption } from './session';
 import type { PeerMesh } from '../rtc/peer-mesh';
+import { DEFAULT_PLAYBACK_VOLUME, loadPlaybackVolume, normalizePlaybackVolume, savePlaybackVolume } from './playback-volume';
 
 interface MediaControllerOptions {
   groupId?: string;
   mesh: PeerMesh | null;
   connectedPeerIds: readonly string[];
 }
-
 export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaControllerOptions) {
   const [mediaReady, setMediaReady] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceOption[]>([]);
@@ -20,6 +20,14 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   const [callActive, setCallActive] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
   const [playbackMuted, setPlaybackMuted] = useState(false);
+  const [playbackVolume, setPlaybackVolumeState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_PLAYBACK_VOLUME;
+    try {
+      return loadPlaybackVolume(window.localStorage);
+    } catch {
+      return DEFAULT_PLAYBACK_VOLUME;
+    }
+  });
   const [microphoneTestActive, setMicrophoneTestActive] = useState(false);
   const [microphoneLevel, setMicrophoneLevel] = useState(0);
   const [displaySources, setDisplaySources] = useState<SelectedDisplaySource[]>([]);
@@ -111,6 +119,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     });
     sessionRef.current = session;
     if (audioElementRef.current) session.attachOutput(audioElementRef.current);
+    session.setPlaybackVolume(playbackVolume);
+    session.setPlaybackMuted(playbackMuted);
     setMediaReady(true);
     setAudioError('');
     const removeDeviceListener = session.onDeviceRemovedEvent(({ kind }) => {
@@ -170,6 +180,11 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   }, [mediaReady, playbackMuted, selectedOutputId]);
 
   useEffect(() => {
+    if (!mediaReady) return;
+    sessionRef.current?.setPlaybackVolume(playbackVolume);
+  }, [mediaReady, playbackVolume]);
+
+  useEffect(() => {
     const audio = audioElementRef.current;
     if (!audio) return;
     const stream = remoteAudioStreamRef.current;
@@ -213,12 +228,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     if (stream) void video.play().catch(() => setShareError('A prévia de vídeo não pôde ser iniciada.'));
   }, [displayStream, remoteVideoStream]);
 
-  const configureCodecPreference = useCallback((peerId: string, track: MediaStreamTrack) => {
+  const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack, isVoiceTrack: boolean) => {
     if (!mesh) return;
     const item = mesh.getMediaSenders().find((candidate) => candidate.peerId === peerId && candidate.sender.track === track);
     if (!item) return;
     const sender = item.sender;
     if (configuredSendersRef.current.has(sender)) return;
+    configuredSendersRef.current.add(sender);
     const transceiver = item.connection.getTransceivers().find((candidate) => candidate.sender === sender);
     const controller = qualityControllerRef.current;
     try {
@@ -229,7 +245,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     } catch {
       // Codec preference is optional; WebRTC still negotiates its compatible default list.
     }
-    configuredSendersRef.current.add(sender);
+    if (track.kind === 'audio' && isVoiceTrack) {
+      try {
+        await controller.configureVoiceSender(sender);
+      } catch {
+        // Keep the browser's default congestion-controlled audio parameters.
+      }
+    }
   }, [mesh]);
 
   const attachStreamToPeer = useCallback(async (peerId: string, stream: MediaStream) => {
@@ -238,9 +260,26 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     for (const track of stream.getTracks()) {
       if (track.readyState !== 'live') continue;
       await session.attachTrack(peerId, track, stream);
-      configureCodecPreference(peerId, track);
+      await configureCodecPreference(peerId, track, stream === microphoneStreamRef.current);
     }
   }, [configureCodecPreference]);
+
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session || !mesh) return;
+    const streams = [callActive ? microphoneStreamRef.current : null, shareActive ? displayStreamRef.current : null]
+      .filter((stream): stream is MediaStream => Boolean(stream));
+    let current = true;
+    for (const peerId of connectedPeerIds) {
+      for (const stream of streams) {
+        void attachStreamToPeer(peerId, stream).catch(() => {
+          if (current) setAudioError('Não foi possível compartilhar o áudio com o participante.');
+        });
+      }
+    }
+    return () => { current = false; };
+  }, [mesh, connectedPeerIds, callActive, shareActive, attachStreamToPeer, mediaReady]);
+
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -526,6 +565,17 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       return !muted;
     });
   }, []);
+  const setPlaybackVolume = useCallback((volume: number) => {
+    if (!Number.isFinite(volume)) return;
+    const normalized = normalizePlaybackVolume(volume);
+    setPlaybackVolumeState(normalized);
+    sessionRef.current?.setPlaybackVolume(normalized);
+    try {
+      savePlaybackVolume(window.localStorage, normalized);
+    } catch {
+      // The volume still applies until this window closes.
+    }
+  }, []);
 
   const refreshDisplaySources = useCallback(async () => {
     const result = await sessionRef.current?.listDisplaySources();
@@ -608,6 +658,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     callActive,
     micMuted,
     playbackMuted,
+    playbackVolume,
+    setPlaybackVolume,
     microphoneTestActive,
     microphoneLevel,
     displaySources,

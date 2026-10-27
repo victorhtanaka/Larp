@@ -1132,6 +1132,21 @@ function App() {
               >
                 <Icon name="headphones" size={17} /><span>{media.playbackMuted ? 'Áudio silenciado' : 'Saída de áudio'}</span>
               </button>
+              <label className="playback-volume-control">
+                <span>Volume</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(media.playbackVolume * 100)}
+                  disabled={!media.mediaReady}
+                  aria-label="Volume do áudio recebido"
+                  onChange={(event) => media.setPlaybackVolume(Number(event.currentTarget.value) / 100)}
+                />
+                <output aria-hidden="true">{Math.round(media.playbackVolume * 100)}%</output>
+              </label>
+
               <button type="button" className="call-control device-control" disabled={!activeCloudGroup || !media.mediaReady} onClick={openAudioSettings}>Dispositivos</button>
               <button
                 type="button"
