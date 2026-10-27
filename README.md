@@ -6,7 +6,7 @@ O aplicativo não inclui credenciais de serviço, não habilita recursos pagos e
 
 ## Interface
 
-A interface usa zoom de página de 150% somente na janela principal e mantém os tamanhos atuais de janela. A paleta usa Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`) e Existential Angst (`#0a0a0a`), sem tons adicionais. A organização mantém três áreas: grupos à esquerda, conversa no centro e detalhes/membros à direita. A referência ao Discord é visual; o Larp não cria canais, servidores públicos ou conteúdo fictício.
+A interface usa zoom de página de 125% somente na janela principal e mantém os tamanhos atuais de janela. A paleta usa Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`) e Existential Angst (`#0a0a0a`), sem tons adicionais. A organização mantém três áreas: grupos à esquerda, conversa no centro e detalhes/membros à direita. A referência ao Discord é visual; o Larp não cria canais, servidores públicos ou conteúdo fictício.
 
 Perfis são opt-in: nome de até 32 caracteres e foto WebP quadrada de 128 × 128, até 48 KiB (imagem original até 8 MiB). O usuário só altera o próprio perfil; leitura fica limitada por RLS a si mesmo e a pessoas com quem compartilha ao menos um grupo privado. O cache local guarda os perfis dos membros dos grupos reais e continua somente leitura offline. Limpar o perfil restaura o identificador de PC; mensagens e assinaturas não mudam.
 

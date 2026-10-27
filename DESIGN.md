@@ -210,7 +210,7 @@ Use Existential Angst text on Valentine Heart actions; Steam text remains on Dar
 
 ## Layout
 
-The main Electron window applies 150% page zoom while retaining its 1440×900 initial size and 980×680 minimum. At 100% Windows display scaling, these produce approximate CSS viewports of 960×600 and 653×453. The desktop workspace keeps three columns: a fixed group sidebar, flexible conversation, and fixed details/member panel. At the minimum CSS width the columns are 196px / about 245px / 212px.
+The main Electron window applies 125% page zoom while retaining its 1440×900 initial size and 980×680 minimum. At 100% Windows display scaling, these produce approximate CSS viewports of 1152×720 and 784×544. The desktop workspace keeps three columns: a fixed group sidebar, flexible conversation, and fixed details/member panel. At the minimum CSS width the columns are 196px / 376px / 212px.
 
 The existing 1120px and 1020px breakpoints adapt columns and voice controls. At widths up to 680px, group forms stack and header, composer, and dialog actions can wrap. At heights up to 760px, vertical padding and message gaps tighten while the composer remains docked. Group lists and details scroll independently; message history scrolls in the central panel.
 

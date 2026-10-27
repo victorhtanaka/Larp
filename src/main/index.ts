@@ -74,7 +74,7 @@ function createWindow(): void {
   const webContentsId = window.webContents.id;
 
   window.once('ready-to-show', () => {
-    window.webContents.setZoomFactor(1.5);
+    window.webContents.setZoomFactor(1.25);
     window.show();
     closeStartupUpdater();
   });
