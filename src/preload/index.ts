@@ -15,6 +15,8 @@ const bridge: LarpBridge = {
   removeCloudMember: (groupId, memberUserId) => ipcRenderer.invoke('cloud:remove-member', { groupId, memberUserId }),
   leaveCloudGroup: (groupId) => ipcRenderer.invoke('cloud:leave-group', groupId),
   getCloudMembers: (groupId) => ipcRenderer.invoke('cloud:get-members', groupId),
+  getMyProfile: () => ipcRenderer.invoke('profile:get'),
+  saveMyProfile: (profile) => ipcRenderer.invoke('profile:save', profile),
   subscribeCloudMembers: (groupId, onMembers, onError) => {
     let active = true;
     const updateListener = (_event: Electron.IpcRendererEvent, input: { groupId: string; members: GroupMember[] }) => {

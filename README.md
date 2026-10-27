@@ -1,12 +1,14 @@
 # Larp
 
-Aplicativo desktop Windows x64 para grupos privados de até seis pessoas. Electron + React + TypeScript; interface em português. O projeto inclui chat P2P assinado e persistido localmente, chamada de voz, compartilhamento de tela e áudio opcional do sistema. A comunicação entre PCs exige configuração de um projeto Supabase e, para conexões difíceis, credenciais de um provedor TURN gratuito.
+Aplicativo desktop Windows x64 para grupos privados de até seis pessoas. Electron + React + TypeScript; interface em português. O projeto inclui chat P2P assinado e persistido localmente, chamada de voz, compartilhamento de tela e áudio opcional do sistema. Perfis de exibição opcionais complementam os membros autorizados sem alterar mensagens assinadas. A comunicação entre PCs exige configuração de um projeto Supabase e, para conexões difíceis, credenciais de um provedor TURN gratuito.
 
 O aplicativo não inclui credenciais de serviço, não habilita recursos pagos e não presume que STUN/TURN ou uma chamada funcionaram. Sem configuração externa, a interface não inventa grupos, perfis ou mensagens; o histórico só aparece quando há dados reais em cache.
 
 ## Interface
 
-A interface usa fundo escuro (`#1A1A1A`) e texto claro (`#F0F0F0`), com teal (`#004D61`) e ruby (`#822659`) nos acentos e verde-floresta (`#3E5641`) nas ações principais. A organização mantém três áreas: grupos à esquerda, conversa no centro e detalhes/membros à direita. A referência ao Discord é visual; o Larp não cria canais, servidores públicos ou conteúdo fictício.
+A interface usa zoom de página de 150% somente na janela principal e mantém os tamanhos atuais de janela. A paleta usa Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`) e Existential Angst (`#0a0a0a`), sem tons adicionais. A organização mantém três áreas: grupos à esquerda, conversa no centro e detalhes/membros à direita. A referência ao Discord é visual; o Larp não cria canais, servidores públicos ou conteúdo fictício.
+
+Perfis são opt-in: nome de até 32 caracteres e foto WebP quadrada de 128 × 128, até 48 KiB (imagem original até 8 MiB). O usuário só altera o próprio perfil; leitura fica limitada por RLS a si mesmo e a pessoas com quem compartilha ao menos um grupo privado. O cache local guarda os perfis dos membros dos grupos reais e continua somente leitura offline. Limpar o perfil restaura o identificador de PC; mensagens e assinaturas não mudam.
 
 
 ## Requisitos
@@ -42,6 +44,8 @@ Apagar ou perder a chave de identidade impede a recuperação da conta/grupos po
    - `supabase/migrations/0003_screen_share_leases.sql`
    - `supabase/migrations/0004_membership_realtime.sql`
    - `supabase/migrations/20261026230136_fix_screen_share_lease_timestamp.sql`
+   - `supabase/migrations/20261027004027_larp_user_profiles.sql`
+   A migration de perfis precisa estar aplicada antes de iniciar/atualizar o app contra esse projeto; a versão do cliente que usa perfis depende da tabela na listagem de membros.
 4. O instalador Windows inclui `default-cloud-config.json` com a URL e a chave pública do projeto. Na primeira execução, ele copia esse arquivo para `app.getPath('userData')/config.json` somente se ainda não houver configuração; configurações existentes são preservadas.
    Para executar o projeto a partir do código-fonte, crie `config.json` em `app.getPath('userData')`:
 
@@ -53,9 +57,9 @@ Apagar ou perder a chave de identidade impede a recuperação da conta/grupos po
    ```
 
    Alternativamente, defina `LARP_SUPABASE_URL` e `LARP_SUPABASE_ANON_KEY`. Nunca use `service_role`, `sb_secret_...` ou chave administrativa no aplicativo; o cliente rejeita chaves com papel `service_role`.
-5. Confirme que Auth, Postgres, Realtime privado e Edge Functions estão disponíveis no plano selecionado. A migração 0004 habilita eventos de alteração de membros para a tabela `larp_group_members`.
+5. Confirme que Auth, Postgres, Realtime privado e Edge Functions estão disponíveis no plano selecionado. A migração 0004 habilita eventos de alteração de membros; `20261027004027` habilita atualização em tempo real dos perfis e usa RLS para filtrar visibilidade.
 
-O Supabase guarda identidades públicas, grupos, membros e hashes de convites. Mensagens e histórico permanecem nos PCs. O app usa políticas RLS, convites de uso único por sete dias, limite atômico de seis membros e transferência de proprietário ao sair. A configuração e a identidade local não substituem políticas de cobrança: revalide os limites e termos do plano gratuito antes de publicar.
+O Supabase guarda identidades públicas, grupos, membros, perfis opcionais, convites e concessões de tela. Perfis guardam `display_name` e um thumbnail WebP, sem campos de usuário arbitrários; nomes e fotos são visíveis apenas entre membros de grupos privados em comum. Mensagens e histórico permanecem nos PCs. O app usa políticas RLS, convites de uso único por sete dias, limite atômico de seis membros e transferência de proprietário ao sair. A configuração e a identidade local não substituem políticas de cobrança: revalide os limites e termos do plano gratuito antes de publicar.
 
 ## Configurar TURN gratuito (opcional)
 
@@ -92,6 +96,7 @@ Quando a função não fornece credenciais TURN (por configuração, limite ou s
 - Escolha explícita de monitor/janela; áudio do sistema desativado por padrão; reserva única de compartilhamento com expiração e liberação ao parar.
 - Visualização da transmissão em tela cheia na janela, maximizando sem ocultar a barra de tarefas; `Esc` restaura o estado e o tamanho anteriores da janela.
 - Modos Movimento e Texto, codecs negociados (AV1/VP9/H.264/VP8 conforme suporte), orçamento total padrão de 20 Mb/s e teto de 8 Mb/s por conexão; métricas de resolução, FPS, codec, upload e caminho observado.
+- Perfis opcionais com nome e avatar WebP para membros autorizados; visibilidade compartilhada por grupo privado, armazenamento offline somente leitura e pseudônimo local restaurado ao limpar os campos.
 - Electron com `contextIsolation`, sandbox, Node desativado no renderer, permissões explícitas e IPC validado no processo principal.
 - A nova logo aparece no cabeçalho do Larp e na janela do updater; o ícone Windows é incluído no executável e no Setup Squirrel.
 
@@ -105,9 +110,9 @@ npm test
 npm run make
 ```
 
-Os testes locais cobrem persistência/migração SQLite, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
+Os testes locais cobrem persistência/migração SQLite (incluindo cache de perfil v4→v5), validação de nome/avatar e formato IPC, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. O teste SQL `supabase/tests/larp_user_profiles.test.sql` cobre RLS e visibilidade por associação; execute-o com `npx supabase start` e `npx supabase test db`. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
 
-O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais, incluindo aquisição exclusiva e liberação do lease de compartilhamento de tela. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
+O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais para grupos/leases, além de testar criação e atualização do próprio perfil, leitura por membro compartilhado e negação para não membros ou após remoção da associação. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
 
 ## Atualizações automáticas e Pesquisa do Windows
 

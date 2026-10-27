@@ -3,6 +3,7 @@ import type { GroupMember, IdentitySignature } from '../shared/cloud-contracts';
 import { envelopeSigningBytes, parseProtocolEnvelope, validateProtocolEnvelope, MAX_SYNC_RANGE, MAX_SYNC_BATCH_MESSAGES, type SignedChatEnvelope, type SignedAckEnvelope } from '../shared/webrtc-protocol';
 import type { LocalLarpDatabase } from './database';
 import type { LarpRuntime } from './services/runtime';
+import { profileUpdateFromIpc } from './profile-validation';
 import { listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVITE_CODE = /^[A-Za-z0-9_-]{43}$/;
@@ -56,6 +57,24 @@ export function registerIpcHandlers(
   ipcMain.handle('cloud:get-status', (event) => {
     assertTrustedFrame(event, getMainWindow());
     return runtime.getCloudStatus();
+  });
+  ipcMain.handle('profile:get', (event) => {
+    assertTrustedFrame(event, getMainWindow());
+    return runtime.getCloudStatus().state === 'ready' ? runtime.requireCloud().getMyProfile() : null;
+  });
+  ipcMain.handle('profile:save', async (event, input: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    if (runtime.getCloudStatus().state !== 'ready') throw new Error('A conexão necessária para salvar o perfil não está disponível.');
+    const profile = await runtime.requireCloud().saveMyProfile(profileUpdateFromIpc(input));
+    for (const group of runtime.getCloudStatus().groups) {
+      const members = database.getCachedCloudMembers(group.id);
+      if (members.some((member) => member.userId === profile.userId)) {
+        database.cacheCloudMembers(group.id, members.map((member) => member.userId === profile.userId
+          ? { ...member, profile }
+          : member));
+      }
+    }
+    return profile;
   });
   ipcMain.handle('display:list-sources', async (event) => {
     assertTrustedFrame(event, getMainWindow());

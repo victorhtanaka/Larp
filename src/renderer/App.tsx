@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChatMessage, SelectedDisplaySource, TurnCredentialServer } from '../shared/contracts';
-import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupSummary, PublicIdentity } from '../shared/cloud-contracts';
+import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupSummary, PublicIdentity, UserProfile } from '../shared/cloud-contracts';
+import { USER_PROFILE_AVATAR_MAX_BYTES, USER_PROFILE_NAME_MAX_LENGTH, USER_PROFILE_SOURCE_MAX_BYTES } from '../shared/cloud-contracts';
 import type { SignedChatEnvelope } from '../shared/webrtc-protocol';
 import { createGroupPeerMesh } from './rtc/create-peer-mesh';
 import type { PeerMesh, PeerConnectionStatus } from './rtc/peer-mesh';
@@ -53,14 +54,91 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
-function Message({ message, localParticipantId }: { message: ChatMessage; localParticipantId?: string }) {
+function profileInitials(name: string | null | undefined, fallback: string): string {
+  const characters = Array.from(name?.trim() ?? '');
+  return characters.length ? characters.slice(0, 2).join('').toLocaleUpperCase('pt-BR') : fallback;
+}
+
+function ProfileAvatar({ profile, initials, className }: {
+  profile?: UserProfile | null;
+  initials: string;
+  className: string;
+}) {
+  return (
+    <div className={className} aria-hidden="true">
+      {profile?.avatarData ? <img src={profile.avatarData} alt="" draggable={false} /> : initials}
+    </div>
+  );
+}
+
+async function avatarDataFromFile(file: File): Promise<string> {
+  if (file.size < 1 || file.size > USER_PROFILE_SOURCE_MAX_BYTES) {
+    throw new Error('Escolha uma imagem com até 8 MiB.');
+  }
+  const image = await createImageBitmap(file);
+  try {
+    if (image.width > 8192 || image.height > 8192 || image.width * image.height > 33_554_432) {
+      throw new Error('A imagem excede o limite de resolução.');
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Não foi possível preparar a foto de perfil.');
+    const cropSize = Math.min(image.width, image.height);
+    context.drawImage(
+      image,
+      (image.width - cropSize) / 2,
+      (image.height - cropSize) / 2,
+      cropSize,
+      cropSize,
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    let thumbnail: Blob | null = null;
+    for (const quality of [0.86, 0.72, 0.58, 0.44, 0.3]) {
+      thumbnail = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob(resolve, 'image/webp', quality);
+      });
+      if (!thumbnail || thumbnail.type !== 'image/webp') {
+        throw new Error('Este computador não conseguiu criar uma foto WebP.');
+      }
+      if (thumbnail.size <= USER_PROFILE_AVATAR_MAX_BYTES) break;
+    }
+    if (!thumbnail || thumbnail.size > USER_PROFILE_AVATAR_MAX_BYTES) {
+      throw new Error('A miniatura da foto excede 48 KiB.');
+    }
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('Não foi possível ler a foto de perfil.'));
+      reader.onerror = () => reject(new Error('Não foi possível ler a foto de perfil.'));
+      reader.readAsDataURL(thumbnail);
+    });
+  } finally {
+    image.close();
+  }
+}
+
+function Message({ message, localParticipantId, profile }: {
+  message: ChatMessage;
+  localParticipantId?: string;
+  profile?: UserProfile | null;
+}) {
   const isLocal = message.authorId === localParticipantId;
   return (
     <article className={`message ${isLocal ? 'message-local' : ''}`}>
-      <div className={`avatar ${isLocal ? 'avatar-local' : ''}`} aria-hidden="true">{message.authorInitials}</div>
+      <ProfileAvatar
+        className={`avatar ${isLocal ? 'avatar-local' : ''}`}
+        profile={profile}
+        initials={profileInitials(profile?.displayName, message.authorInitials)}
+      />
       <div className="message-content">
         <div className="message-meta">
-          <span className="message-author">{message.authorName}</span>
+          <span className="message-author">{profile?.displayName ?? message.authorName}</span>
           <span className={`message-origin ${isLocal ? 'origin-local' : ''}`}>{isLocal ? 'Este PC' : 'P2P assinado'}</span>
           <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
         </div>
@@ -120,6 +198,14 @@ function App() {
   const persistedCloudMessageIds = useRef(new Set<string>());
   const [memberLoading, setMemberLoading] = useState(false);
   const [identity, setIdentity] = useState<PublicIdentity | null>(null);
+  const [myProfile, setMyProfile] = useState<UserProfile | null>();
+  const [profileName, setProfileName] = useState('');
+  const [profileAvatarData, setProfileAvatarData] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profilePhotoBusy, setProfilePhotoBusy] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileNotice, setProfileNotice] = useState('');
   const [draft, setDraft] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [joinInviteCode, setJoinInviteCode] = useState('');
@@ -131,7 +217,7 @@ function App() {
 
   const [sending, setSending] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen'>('connection');
+  const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen' | 'profile'>('connection');
   const [screenViewerExpanded, setScreenViewerExpanded] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -154,6 +240,20 @@ function App() {
     : undefined;
   const displayCloudGroup = activeCloudGroup ?? cachedCloudGroup;
   const activeGroup = displayCloudGroup;
+  const meshMembershipKey = JSON.stringify(cloudMembers.map((member) => [
+    member.userId,
+    member.publicKey,
+    member.joinedAt,
+    member.role,
+  ]));
+  // Profile-only updates must not tear down active peer connections.
+  const meshMembers = useMemo(() => cloudMembers.map(({ userId, publicKey, joinedAt, role }) => ({
+    userId,
+    publicKey,
+    joinedAt,
+    role,
+    profile: null,
+  })), [meshMembershipKey]);
 
 
   const openHelp = (event: MouseEvent<HTMLButtonElement>) => {
@@ -167,6 +267,27 @@ function App() {
     setCloudError('');
     setCloudNotice('');
     setHelpOpen(true);
+  };
+  const openProfileEditor = async (event: MouseEvent<HTMLButtonElement>) => {
+    helpTriggerRef.current = event.currentTarget;
+    if (cloudStatus.state !== 'ready') return;
+    setDialogMode('profile');
+    setHelpOpen(true);
+    setProfileError('');
+    setProfileNotice('');
+    setProfileName(myProfile?.displayName ?? '');
+    setProfileAvatarData(myProfile?.avatarData ?? null);
+    setProfileLoading(true);
+    try {
+      const profile = await window.larp.getMyProfile();
+      setMyProfile(profile);
+      setProfileName(profile?.displayName ?? '');
+      setProfileAvatarData(profile?.avatarData ?? null);
+    } catch (cause) {
+      setProfileError(describeError(cause, 'Não foi possível carregar seu perfil.'));
+    } finally {
+      setProfileLoading(false);
+    }
   };
   const closeHelp = () => {
     if (dialogMode === 'audio' && media.microphoneTestActive) void media.stopMicrophoneTest();
@@ -220,6 +341,17 @@ function App() {
       .catch((cause: unknown) => setCloudError(describeError(cause, 'Não foi possível atualizar os grupos.')));
     void window.larp.getPublicIdentity().then(setIdentity).catch(() => setIdentity(null));
   }, []);
+  useEffect(() => {
+    if (!localCloudUserId) return;
+    let current = true;
+    setMyProfile(undefined);
+    void window.larp.getMyProfile()
+      .then((profile) => { if (current) setMyProfile(profile); })
+      .catch((cause: unknown) => {
+        if (current) setCloudError(describeError(cause, 'Não foi possível carregar seu perfil.'));
+      });
+    return () => { current = false; };
+  }, [localCloudUserId]);
 
 
   useEffect(() => {
@@ -267,6 +399,7 @@ function App() {
           return;
         }
         setCloudMembers(members);
+        setMyProfile(members.find((member) => member.userId === localCloudUserId)?.profile ?? null);
         setMemberGroupId(groupId);
         setMemberLoading(false);
         if (initialSnapshot) {
@@ -291,6 +424,7 @@ function App() {
               return;
             }
             setCloudMembers(members);
+            setMyProfile(members.find((member) => member.userId === localCloudUserId)?.profile ?? null);
             setMemberGroupId(groupId);
             setMemberLoading(false);
           })
@@ -427,7 +561,7 @@ function App() {
           bridge: window.larp,
           groupId: group.id,
           localParticipantId: localCloudUserId,
-          members: cloudMembers,
+          members: meshMembers,
           turnServers,
           onMessage: (message) => {
             if (!current) return;
@@ -457,7 +591,7 @@ function App() {
       mesh?.close();
       if (meshRef.current === mesh) meshRef.current = null;
     };
-  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, cloudMembers, meshRetryNonce, media.handleRemoteTrack]);
+  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, meshMembers, meshRetryNonce, media.handleRemoteTrack]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -681,6 +815,54 @@ function App() {
       setCloudAction('');
     }
   };
+  const chooseProfilePhoto = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setProfileError('Escolha uma imagem PNG, JPEG ou WebP.');
+      return;
+    }
+    setProfileError('');
+    setProfileNotice('');
+    setProfilePhotoBusy(true);
+    try {
+      setProfileAvatarData(await avatarDataFromFile(file));
+      setProfileNotice('Foto preparada. Salve o perfil para publicá-la.');
+    } catch (cause) {
+      setProfileError(describeError(cause, 'Não foi possível preparar a foto de perfil.'));
+    } finally {
+      setProfilePhotoBusy(false);
+    }
+  };
+
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (cloudStatus.state !== 'ready' || profileSaving || profileLoading || profilePhotoBusy) return;
+    const displayName = profileName.trim();
+    if (Array.from(displayName).length > USER_PROFILE_NAME_MAX_LENGTH) {
+      setProfileError(`O nome deve ter até ${USER_PROFILE_NAME_MAX_LENGTH} caracteres.`);
+      return;
+    }
+    setProfileError('');
+    setProfileNotice('');
+    setProfileSaving(true);
+    try {
+      const profile = await window.larp.saveMyProfile({
+        displayName: displayName || null,
+        avatarData: profileAvatarData,
+      });
+      setMyProfile(profile);
+      setCloudMembers((members) => members.map((member) => member.userId === profile.userId ? { ...member, profile } : member));
+      setCachedCloudMembers((members) => members.map((member) => member.userId === profile.userId ? { ...member, profile } : member));
+      setProfileNotice('Perfil salvo. Visível apenas a membros dos seus grupos em comum.');
+    } catch (cause) {
+      setProfileError(describeError(cause, 'Não foi possível salvar o perfil.'));
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
   const startSelectedScreenShare = async () => {
     const source: SelectedDisplaySource | undefined = media.displaySources.find((candidate) => candidate.id === media.selectedDisplaySourceId);
     if (!source) return;
@@ -695,6 +877,13 @@ function App() {
   const localParticipantId = activeCloudGroup
     ? localCloudUserId
     : cachedCloudMembers.find((member) => member.publicKey === identity?.publicKey)?.userId;
+  const profilesByUserId = new Map(
+    visibleMembers.flatMap((member) => member.profile ? [[member.userId, member.profile] as const] : []),
+  );
+  const selfMember = visibleMembers.find((member) => member.userId === localParticipantId
+    || member.publicKey === identity?.publicKey);
+  const selfProfile = myProfile !== undefined ? myProfile : selfMember?.profile ?? null;
+  const profileNameTooLong = Array.from(profileName.trim()).length > USER_PROFILE_NAME_MAX_LENGTH;
 
   return (
     <main className={`app-shell${screenViewerExpanded ? ' app-shell-screen-expanded' : ''}`}>
@@ -755,9 +944,25 @@ function App() {
         </button>
 
         <div className="sidebar-footer">
-          <div className="profile-avatar" aria-hidden="true">{identity ? 'PC' : 'L'}</div>
-          <div className="profile-copy"><strong>{identity ? 'Este computador' : 'Larp'}</strong><span>{identity ? 'Identidade Ed25519 protegida' : 'Identidade indisponível'}</span></div>
-
+          <ProfileAvatar
+            className="profile-avatar"
+            profile={selfProfile}
+            initials={profileInitials(selfProfile?.displayName, identity ? 'PC' : 'L')}
+          />
+          <div className="profile-copy">
+            <strong>{selfProfile?.displayName || (identity ? 'Este computador' : 'Larp')}</strong>
+            <span>{selfProfile ? 'Perfil dos grupos em comum' : identity ? 'Identidade Ed25519 protegida' : 'Identidade indisponível'}</span>
+          </div>
+          <button
+            className="profile-edit"
+            type="button"
+            disabled={cloudStatus.state !== 'ready'}
+            aria-label="Editar perfil"
+            title={cloudStatus.state === 'ready' ? 'Editar perfil compartilhado' : 'Conecte-se para editar o perfil'}
+            onClick={(event) => void openProfileEditor(event)}
+          >
+            Editar
+          </button>
           <button className="icon-button profile-info" type="button" aria-label="Ver estado da conexão" onClick={openHelp}>
             <Icon name="info" size={17} />
           </button>
@@ -839,7 +1044,7 @@ function App() {
               <>
                 <div className="date-divider"><span>Histórico P2P assinado</span></div>
                 {cloudMessages.map((message) => (
-                  <Message key={message.id} message={message} localParticipantId={localCloudUserId} />
+                  <Message key={message.id} message={message} localParticipantId={localCloudUserId} profile={profilesByUserId.get(message.authorId)} />
                 ))}
                 <div className="local-note"><span /> Mensagens assinadas; o histórico fica armazenado neste computador.</div>
               </>
@@ -855,7 +1060,7 @@ function App() {
           ) : cachedMessages.length ? (
             <>
               <div className="date-divider"><span>Histórico salvo neste PC · somente leitura</span></div>
-              {cachedMessages.map((message) => <Message key={message.id} message={message} localParticipantId={localParticipantId} />)}
+              {cachedMessages.map((message) => <Message key={message.id} message={message} localParticipantId={localParticipantId} profile={profilesByUserId.get(message.authorId)} />)}
               <div className="local-note"><span /> Mensagens assinadas e metadados ficam armazenados neste computador.</div>
             </>
           ) : (
@@ -968,14 +1173,19 @@ function App() {
             {visibleMembers.map((member) => {
               const isSelf = member.publicKey === identity?.publicKey
                 || (cloudStatus.state === 'ready' && member.userId === cloudStatus.userId);
-              const label = isSelf ? 'Este computador' : `PC · ${member.userId.slice(-6).toUpperCase()}`;
+              const fallbackLabel = isSelf ? 'Este computador' : `PC · ${member.userId.slice(-6).toUpperCase()}`;
+              const label = member.profile?.displayName || fallbackLabel;
               const roleLabel = member.role === 'owner' ? 'Responsável' : 'Membro';
               const memberContext = cachedCloudGroup
                 ? `${roleLabel} · offline`
                 : `${roleLabel} · ${isSelf ? 'neste PC' : 'presença não verificada'}`;
               return (
                 <li key={member.userId} className="member-row">
-                  <span className={`avatar member-avatar ${isSelf ? 'avatar-local' : ''}`} aria-hidden="true">{isSelf ? 'PC' : member.userId.slice(-2).toUpperCase()}</span>
+                  <ProfileAvatar
+                    className={`avatar member-avatar ${isSelf ? 'avatar-local' : ''}`}
+                    profile={member.profile}
+                    initials={profileInitials(member.profile?.displayName, isSelf ? 'PC' : member.userId.slice(-2).toUpperCase())}
+                  />
                   <span className="member-name"><strong>{label}</strong><span>{memberContext}</span></span>
                   {activeCloudGroup?.role === 'owner' && !isSelf && (
                     <button className="remove-member" type="button" disabled={Boolean(cloudAction)} aria-label={`Remover ${label}`} title="Remover membro" onClick={() => void removeMember(member)}>
@@ -1004,7 +1214,7 @@ function App() {
 
       {helpOpen && (
         <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeHelp(); }}>
-          <section className={`connection-dialog ${dialogMode === 'groups' ? 'group-manager-dialog' : dialogMode === 'audio' ? 'audio-settings-dialog' : dialogMode === 'screen' ? 'screen-settings-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title" aria-describedby="connection-dialog-description">
+          <section className={`connection-dialog ${dialogMode === 'groups' ? 'group-manager-dialog' : dialogMode === 'audio' ? 'audio-settings-dialog' : dialogMode === 'screen' ? 'screen-settings-dialog' : dialogMode === 'profile' ? 'profile-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title" aria-describedby="connection-dialog-description">
             <button ref={helpCloseRef} className="icon-button dialog-close" type="button" aria-label="Fechar diálogo" onClick={closeHelp}><Icon name="close" size={18} /></button>
             {dialogMode === 'connection' ? (
               <>
@@ -1090,6 +1300,74 @@ function App() {
                   <button className="dialog-done" type="button" onClick={closeHelp}>Fechar</button>
                 </div>
               </>
+            ) : dialogMode === 'profile' ? (
+              <form className="profile-form" onSubmit={(event) => void saveProfile(event)}>
+                <h2 id="connection-dialog-title">Editar perfil</h2>
+                <p id="connection-dialog-description">Nome e foto aparecem para membros dos seus grupos privados em comum. Mensagens assinadas permanecem inalteradas.</p>
+                {profileLoading && <p className="profile-hint" role="status">Carregando seu perfil…</p>}
+                <label htmlFor="profile-display-name">Nome de exibição</label>
+                <input
+                  id="profile-display-name"
+                  className="profile-name-input"
+                  type="text"
+                  maxLength={USER_PROFILE_NAME_MAX_LENGTH * 2}
+                  value={profileName}
+                  onChange={(event) => setProfileName(event.target.value)}
+                  placeholder="Como você aparece nos grupos"
+                  disabled={cloudStatus.state !== 'ready' || profileLoading || profileSaving}
+                  aria-invalid={profileNameTooLong}
+                  aria-describedby="profile-name-hint"
+                />
+                <p className="profile-hint" id="profile-name-hint">
+                  Até {USER_PROFILE_NAME_MAX_LENGTH} caracteres. Vazio restaura seu identificador de PC.
+                </p>
+                <label htmlFor="profile-avatar-file">Foto de perfil</label>
+                <div className="profile-photo-control">
+                  <ProfileAvatar
+                    className="profile-avatar profile-avatar-preview"
+                    profile={{ userId: localCloudUserId ?? '', displayName: profileName || null, avatarData: profileAvatarData }}
+                    initials={profileInitials(profileName, 'PC')}
+                  />
+                  <div className="profile-photo-actions">
+                    <input
+                      id="profile-avatar-file"
+                      className="profile-file-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={cloudStatus.state !== 'ready' || profileLoading || profilePhotoBusy || profileSaving}
+                      onChange={(event) => void chooseProfilePhoto(event.currentTarget)}
+                    />
+                    <button
+                      className="dialog-secondary"
+                      type="button"
+                      disabled={!profileAvatarData || profilePhotoBusy || profileSaving}
+                      onClick={() => { setProfileAvatarData(null); setProfileNotice('Foto removida. Salve o perfil para aplicar.'); }}
+                    >
+                      Remover foto
+                    </button>
+                  </div>
+                </div>
+                <p className="profile-hint">A imagem será cortada em quadrado e convertida para WebP 128 × 128, até 48 KiB.</p>
+                {profileError && <p className="dialog-error" role="alert">{profileError}</p>}
+                {profileNotice && <p className="dialog-success" role="status">{profileNotice}</p>}
+                <div className="dialog-actions profile-actions">
+                  <button
+                    className="dialog-secondary"
+                    type="button"
+                    disabled={profileLoading || profilePhotoBusy || profileSaving}
+                    onClick={() => { setProfileName(''); setProfileAvatarData(null); setProfileNotice('Perfil limpo. Salve para restaurar o identificador de PC.'); }}
+                  >
+                    Limpar perfil
+                  </button>
+                  <button
+                    className="dialog-done"
+                    type="submit"
+                    disabled={cloudStatus.state !== 'ready' || profileLoading || profilePhotoBusy || profileSaving || profileNameTooLong}
+                  >
+                    {profileSaving ? 'Salvando…' : 'Salvar perfil'}
+                  </button>
+                </div>
+              </form>
             ) : dialogMode === 'audio' ? (
               <>
                 <h2 id="connection-dialog-title">Dispositivos de áudio</h2>

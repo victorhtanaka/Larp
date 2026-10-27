@@ -4,8 +4,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isRecord, validateProtocolEnvelope, type SignedProtocolEnvelope } from '../../shared/webrtc-protocol';
-import type { CloudConfigurationStatus, GroupInvite, GroupInviteSummary, GroupLeaveResult, GroupMember, GroupSummary } from '../../shared/cloud-contracts';
+import type { CloudConfigurationStatus, GroupInvite, GroupInviteSummary, GroupLeaveResult, GroupMember, GroupSummary, UserProfile, UserProfileUpdate } from '../../shared/cloud-contracts';
 import type { TurnCredentialServer } from '../../shared/contracts';
+import { normalizeProfileFields, userProfileFrom } from '../profile-validation';
 
 interface LocalCloudConfig { supabaseUrl?: string; supabaseAnonKey?: string }
 interface GroupRow { id: string; name: string; created_at: string; member_count: number; role: 'owner' | 'member' }
@@ -190,6 +191,17 @@ function leaveResultFrom(data: unknown): GroupLeaveResult {
   return { deleted: false, group: toGroup(group) };
 }
 
+function profileRowFrom(value: unknown, expectedUserId: string): UserProfile {
+  if (!isRecord(value) || value.user_id !== expectedUserId) {
+    throw new Error('User profile returned an invalid response.');
+  }
+  return userProfileFrom({
+    userId: value.user_id,
+    displayName: value.display_name,
+    avatarData: value.avatar_data,
+  }, expectedUserId);
+}
+
 function membersFrom(data: unknown): GroupMember[] {
   if (!Array.isArray(data)) throw new Error('Group member list returned an invalid response.');
   return data.map((value) => {
@@ -201,7 +213,7 @@ function membersFrom(data: unknown): GroupMember[] {
       || (value.role !== 'owner' && value.role !== 'member')) {
       throw new Error('Group member list returned an invalid member.');
     }
-    return { userId: value.user_id, publicKey: value.public_key, joinedAt: value.joined_at, role: value.role };
+    return { userId: value.user_id, publicKey: value.public_key, joinedAt: value.joined_at, role: value.role, profile: null };
   });
 }
 
@@ -362,11 +374,58 @@ export class SupabaseGroupsService {
     const { data, error } = await this.client.rpc('list_group_members', { p_group_id: groupId });
     if (error) throw new Error(`Could not list group members: ${error.message}`);
     const members = membersFrom(data);
+    const profilesByUserId = new Map<string, UserProfile>();
+    if (members.length) {
+      const { data: profileData, error: profileError } = await this.client
+        .from('larp_user_profiles')
+        .select('user_id, display_name, avatar_data')
+        .in('user_id', members.map((member) => member.userId));
+      if (profileError) throw new Error(`Could not list group member profiles: ${profileError.message}`);
+      if (!Array.isArray(profileData)) throw new Error('Group member profiles returned an invalid response.');
+      for (const value of profileData) {
+        if (!isRecord(value) || typeof value.user_id !== 'string') {
+          throw new Error('Group member profiles returned an invalid profile.');
+        }
+        const profile = profileRowFrom(value, value.user_id);
+        profilesByUserId.set(profile.userId, profile);
+      }
+    }
+    const membersWithProfiles = members.map((member) => ({
+      ...member,
+      profile: profilesByUserId.get(member.userId) ?? null,
+    }));
     const active = this.signalChannels.get(groupId);
     if (active) {
       active.memberIds = new Set(members.map((member) => member.userId));
     }
-    return members;
+    return membersWithProfiles;
+  }
+
+  async getMyProfile(): Promise<UserProfile | null> {
+    this.requireSignIn();
+    const userId = this.signedInUserId;
+    if (!userId) throw new Error('The authenticated cloud user is unavailable.');
+    const { data, error } = await this.client
+      .from('larp_user_profiles')
+      .select('user_id, display_name, avatar_data')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw new Error(`Could not read user profile: ${error.message}`);
+    return data === null ? null : profileRowFrom(data, userId);
+  }
+
+  async saveMyProfile(profile: UserProfileUpdate): Promise<UserProfile> {
+    this.requireSignIn();
+    const userId = this.signedInUserId;
+    if (!userId) throw new Error('The authenticated cloud user is unavailable.');
+    const fields = normalizeProfileFields(profile.displayName, profile.avatarData);
+    const { data, error } = await this.client
+      .from('larp_user_profiles')
+      .upsert({ user_id: userId, display_name: fields.displayName, avatar_data: fields.avatarData }, { onConflict: 'user_id' })
+      .select('user_id, display_name, avatar_data')
+      .single();
+    if (error) throw new Error(`Could not save user profile: ${error.message}`);
+    return profileRowFrom(data, userId);
   }
 
   async getTurnServers(groupId: string): Promise<TurnCredentialServer[]> {
@@ -529,6 +588,11 @@ export class SupabaseGroupsService {
       schema: 'public',
       table: 'larp_group_members',
       filter: `group_id=eq.${groupId}`,
+    }, () => { void refreshMembers().catch(() => undefined); });
+    channel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'larp_user_profiles',
     }, () => { void refreshMembers().catch(() => undefined); });
     channel.subscribe((status, error) => {
       if (status === 'SUBSCRIBED' && !openingSettled) {

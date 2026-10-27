@@ -1,5 +1,5 @@
-import type { CloudConnectionStatus, GroupInvite, GroupMember, GroupSummary, IdentitySignature, PublicIdentity } from './cloud-contracts';
-import type { GroupInviteSummary, GroupLeaveResult } from './cloud-contracts';
+import type { CloudConnectionStatus, GroupInvite, GroupMember, GroupSummary, IdentitySignature, PublicIdentity, UserProfile } from './cloud-contracts';
+import type { GroupInviteSummary, GroupLeaveResult, UserProfileUpdate } from './cloud-contracts';
 import type { SignedAckEnvelope, SignedChatEnvelope, SignedProtocolEnvelope } from './webrtc-protocol';
 
 export interface ChatMessage {
@@ -40,6 +40,8 @@ export interface LarpBridge {
   removeCloudMember(groupId: string, memberUserId: string): Promise<void>;
   leaveCloudGroup(groupId: string): Promise<GroupLeaveResult>;
   getCloudMembers(groupId: string): Promise<GroupMember[]>;
+  getMyProfile(): Promise<UserProfile | null>;
+  saveMyProfile(profile: UserProfileUpdate): Promise<UserProfile>;
   subscribeCloudMembers(
     groupId: string,
     onMembers: (members: GroupMember[]) => void,

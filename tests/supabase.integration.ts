@@ -116,6 +116,62 @@ async function scenario(url: string, key: string): Promise<void> {
   await tableRead(outsider, 'larp_groups', groupId);
   await tableRead(outsider, 'larp_group_members', groupId);
   await expectFailure(() => rpc(outsider, 'list_group_members', { p_group_id: groupId }), 'membership required', 'Nonmember must be denied member listing.');
+  const ownerProfile = await owner.client.from('larp_user_profiles')
+    .upsert({ user_id: owner.userId, display_name: 'Dono do grupo', avatar_data: null }, { onConflict: 'user_id' })
+    .select('user_id, display_name')
+    .single();
+  assert.ifError(ownerProfile.error);
+  assert.equal(ownerProfile.data?.display_name, 'Dono do grupo');
+  const memberProfile = await member.client.from('larp_user_profiles')
+    .upsert({ user_id: member.userId, display_name: 'Membro do grupo', avatar_data: null }, { onConflict: 'user_id' })
+    .select('user_id, display_name')
+    .single();
+  assert.ifError(memberProfile.error);
+  assert.equal(memberProfile.data?.display_name, 'Membro do grupo');
+
+  const { data: sharedProfile, error: sharedProfileError } = await member.client.from('larp_user_profiles')
+    .select('user_id, display_name')
+    .eq('user_id', owner.userId)
+    .maybeSingle();
+  assert.ifError(sharedProfileError);
+  assert.equal(sharedProfile?.display_name, 'Dono do grupo', 'A member must read profiles from the same private group.');
+
+  const { data: privateProfile, error: privateProfileError } = await outsider.client.from('larp_user_profiles')
+    .select('user_id, display_name')
+    .eq('user_id', owner.userId)
+    .maybeSingle();
+  assert.ifError(privateProfileError);
+  assert.equal(privateProfile, null, 'A nonmember must not read another user profile.');
+  const { data: unauthorizedUpdate, error: unauthorizedUpdateError } = await outsider.client
+    .from('larp_user_profiles')
+    .update({ display_name: 'Tentativa externa' })
+    .eq('user_id', owner.userId)
+    .select('user_id');
+  assert.ifError(unauthorizedUpdateError);
+  assert.deepEqual(unauthorizedUpdate, [], 'A nonmember must not modify another profile.');
+  const { data: unchangedOwner, error: unchangedOwnerError } = await owner.client.from('larp_user_profiles')
+    .select('display_name')
+    .eq('user_id', owner.userId)
+    .single();
+  assert.ifError(unchangedOwnerError);
+  assert.equal(unchangedOwner?.display_name, 'Dono do grupo');
+
+  const { data: updatedMember, error: updatedMemberError } = await member.client.from('larp_user_profiles')
+    .update({ display_name: 'Membro atualizado' })
+    .eq('user_id', member.userId)
+    .select('display_name')
+    .single();
+  assert.ifError(updatedMemberError);
+  assert.equal(updatedMember?.display_name, 'Membro atualizado', 'A user must update their own profile.');
+
+  await rpc(owner, 'remove_group_member', { p_group_id: groupId, p_member_user_id: member.userId });
+  groups.get(groupId)!.members.splice(0, 1);
+  const { data: revokedProfile, error: revokedProfileError } = await member.client.from('larp_user_profiles')
+    .select('user_id')
+    .eq('user_id', owner.userId)
+    .maybeSingle();
+  assert.ifError(revokedProfileError);
+  assert.equal(revokedProfile, null, 'Profile access must end when the shared group membership ends.');
 
   const beforeReplay = await memberRows(owner, groupId);
   await expectFailure(() => accept(outsider, invitation.code), 'invite unavailable', 'Consumed invite replay must fail.');

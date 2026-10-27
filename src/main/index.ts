@@ -43,7 +43,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 680,
     title: 'Larp',
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#0a0a0a',
     icon: getAppIconPath(),
 
     show: false,
@@ -58,6 +58,7 @@ function createWindow(): void {
   const webContentsId = window.webContents.id;
 
   window.once('ready-to-show', () => {
+    window.webContents.setZoomFactor(1.5);
     window.show();
     closeStartupUpdater();
   });

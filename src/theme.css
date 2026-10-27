@@ -1,0 +1,21 @@
+:root {
+  --steam: #dddcde;
+  --valentine-heart: #be779e;
+  --iron: #5e5e5e;
+  --dark-charcoal: #323232;
+  --eerie-black: #1b1b1b;
+  --existential-angst: #0a0a0a;
+
+  --bg: var(--existential-angst);
+  --panel: var(--eerie-black);
+  --panel-raised: var(--dark-charcoal);
+  --panel-soft: var(--dark-charcoal);
+  --border: var(--iron);
+  --border-soft: var(--iron);
+  --text: var(--steam);
+  --muted: var(--steam);
+  --subtle: var(--steam);
+  --accent: var(--valentine-heart);
+  --danger: var(--valentine-heart);
+  --alert: var(--valentine-heart);
+}

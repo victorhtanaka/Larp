@@ -1,8 +1,9 @@
+@import '../theme.css';
 :root {
   color-scheme: dark;
   font-family: Inter, 'Segoe UI', sans-serif;
-  color: #F0F0F0;
-  background: #1A1A1A;
+  color: var(--text);
+  background: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -10,9 +11,9 @@
 
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { background: #1A1A1A; }
+body { background: var(--bg); }
 button { font: inherit; }
-button:focus-visible { outline: 2px solid #F0F0F0; outline-offset: 3px; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .updater-window {
   display: flex;
@@ -20,8 +21,8 @@ button:focus-visible { outline: 2px solid #F0F0F0; outline-offset: 3px; }
   height: 100%;
   flex-direction: column;
   padding: 16px 22px 15px;
-  background: #1A1A1A;
-  border: 1px solid #383B41;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 10px;
 }
 .window-header {
@@ -33,21 +34,21 @@ button:focus-visible { outline: 2px solid #F0F0F0; outline-offset: 3px; }
 }
 .brand-logo { display: block; width: 78px; height: 28px; object-fit: contain; object-position: left center; }
 .update-content { flex: 1; padding-top: 22px; }
-h1 { margin: 0; color: #F0F0F0; font-size: 17px; font-weight: 680; line-height: 1.35; }
-p { min-height: 39px; margin: 7px 0 0; color: #B3B6BD; font-size: 12px; line-height: 1.55; }
+h1 { margin: 0; color: var(--text); font-size: 17px; font-weight: 680; line-height: 1.35; }
+p { min-height: 39px; margin: 7px 0 0; color: var(--text); font-size: 12px; line-height: 1.55; }
 .progress-track {
   position: relative;
   height: 4px;
   margin-top: 12px;
   overflow: hidden;
-  background: #303238;
+  background: var(--panel-raised);
   border-radius: 999px;
 }
 .progress-indicator {
   position: absolute;
   inset: 0 auto 0 0;
   width: 38%;
-  background: #43A6A0;
+  background: var(--accent);
   border-radius: inherit;
   animation: loading 1.25s ease-in-out infinite;
 }
@@ -56,7 +57,7 @@ p { min-height: 39px; margin: 7px 0 0; color: #B3B6BD; font-size: 12px; line-hei
 .button {
   min-height: 36px;
   padding: 0 13px;
-  border: 1px solid #383B41;
+  border: 1px solid var(--border);
   border-radius: 5px;
   cursor: pointer;
   font-size: 12px;
@@ -64,11 +65,11 @@ p { min-height: 39px; margin: 7px 0 0; color: #B3B6BD; font-size: 12px; line-hei
   transition: background-color 120ms ease, border-color 120ms ease;
   -webkit-app-region: no-drag;
 }
-.button.primary { color: #F0F0F0; background: #3E5641; border-color: #526D56; }
-.button.primary:hover { background: #49654D; }
-.button.secondary { color: #F0F0F0; background: #27292D; }
-.button.secondary:hover { background: #34373C; border-color: #4A4D53; }
-.version-label { margin-top: 10px; color: #92969E; font-size: 10px; }
+.button.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.button.primary:hover { border-color: var(--text); }
+.button.secondary { color: var(--text); background: var(--panel-raised); }
+.button.secondary:hover { background: var(--panel-soft); border-color: var(--accent); }
+.version-label { margin-top: 10px; color: var(--muted); font-size: 10px; }
 
 @keyframes loading {
   from { transform: translateX(-115%); }

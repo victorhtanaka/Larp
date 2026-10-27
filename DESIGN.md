@@ -2,19 +2,24 @@
 name: Larp
 description: Private conversation for invited groups, with voice and screen sharing between their own PCs.
 colors:
-  bg: "#1A1A1A"
-  text: "#F0F0F0"
-  panel: "#202225"
-  panel-raised: "#27292D"
-  panel-soft: "#2B2D31"
-  border: "#383B41"
-  border-soft: "#303238"
-  muted: "#B3B6BD"
-  subtle: "#92969E"
-  accent: "#3E5641"
-  accent-teal: "#004D61"
-  accent-teal-soft: "#153641"
-  accent-ruby: "#822659"
+  steam: "#dddcde"
+  valentine-heart: "#be779e"
+  iron: "#5e5e5e"
+  dark-charcoal: "#323232"
+  eerie-black: "#1b1b1b"
+  existential-angst: "#0a0a0a"
+  bg: "#0a0a0a"
+  text: "#dddcde"
+  panel: "#1b1b1b"
+  panel-raised: "#323232"
+  panel-soft: "#323232"
+  border: "#5e5e5e"
+  border-soft: "#5e5e5e"
+  muted: "#dddcde"
+  subtle: "#dddcde"
+  accent: "#be779e"
+  danger: "#be779e"
+  alert: "#be779e"
 typography:
   display:
     fontFamily: "Georgia, serif"
@@ -93,21 +98,21 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.accent}"
-    textColor: "{colors.text}"
+    textColor: "{colors.bg}"
     typography: "{typography.button}"
     rounded: "{rounded.sm}"
     padding: "0 10px"
     height: "31px"
   button-call:
     backgroundColor: "{colors.accent}"
-    textColor: "{colors.text}"
+    textColor: "{colors.bg}"
     typography: "{typography.call}"
     rounded: "{rounded.sm}"
     padding: "0 10px"
     height: "32px"
   button-confirm:
     backgroundColor: "{colors.accent}"
-    textColor: "{colors.text}"
+    textColor: "{colors.bg}"
     typography: "{typography.confirm}"
     rounded: "{rounded.md}"
     height: "40px"
@@ -119,14 +124,14 @@ components:
     padding: "0 11px"
     height: "38px"
   button-danger:
-    backgroundColor: "{colors.accent-ruby}"
-    textColor: "{colors.text}"
+    backgroundColor: "{colors.danger}"
+    textColor: "{colors.bg}"
     typography: "{typography.control}"
     rounded: "{rounded.md}"
     padding: "0 11px"
     height: "38px"
   group-row-selected:
-    backgroundColor: "{colors.accent-teal}"
+    backgroundColor: "{colors.panel-soft}"
     textColor: "{colors.text}"
     typography: "{typography.group-name}"
     rounded: "{rounded.sm}"
@@ -157,37 +162,31 @@ components:
 
 **Creative North Star: "The Private Group Room"**
 
-Larp is a compact, invitation-based room for friends who already know whom they want to talk to. The interface favors shared context and clear permissions over discovery: a group is private, voice and screen sharing start only after an explicit action, and message history stays on members' PCs.
+Larp is a compact, invitation-based room for friends who already know whom they want to talk to. The interface favors shared context and clear permissions over discovery: groups are private, voice and screen sharing start only after an explicit action, and message history stays on members' PCs. An optional display name and cropped WebP avatar help members recognize each other without changing signed messages.
 
-The spatial language borrows Discord's scan order—real groups at left, one active conversation in the center, and group members and actions at right—without importing a public-server browser or invented channel hierarchy. Dark surfaces stay compact and legible; teal marks selection and connection, forest green marks enabled actions, and ruby carries failure or destructive meaning.
+The spatial language borrows Discord's scan order—real groups at left, one active conversation in the center, and group members and actions at right—without importing a public-server browser or invented channel hierarchy. Dark surfaces use the six named palette colors; Valentine Heart marks focus and action, and Steam remains the readable text color.
 
 **Key Characteristics:**
 - Three-pane Windows desktop workspace: groups, conversation, group details and members.
+- Optional profile names and circular WebP avatars appear only in authorized group-member and message views.
 - Invitation-based privacy and real membership/connection states.
 - Layered near-black surfaces, thin separators, restrained semantic accents.
 - Visible keyboard focus and reduced-motion support.
 
 ## Colors
 
-The palette pairs a deep neutral ground with quiet charcoal layers and three accents reserved for distinct interface states. Frontmatter tokens are normative; status color must describe a real state, not decoration.
+The interface uses exactly six colors: Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`), and Existential Angst (`#0a0a0a`). Semantic tokens map onto these primitives without adding shades.
 
-### Primary
-- **Forest green** (`accent`): enabled send, call, and dialog-confirm actions; also identifies the local member state.
+### Semantic Mapping
+- **Existential Angst** (`bg`): application canvas and expanded viewer.
+- **Eerie Black** (`panel`): side panels and card surfaces.
+- **Dark Charcoal** (`panel-raised`, `panel-soft`): controls, composer and selected surfaces.
+- **Iron** (`border`, `border-soft`): dividers and borders.
+- **Steam** (`text`, `muted`, `subtle`): readable copy on dark surfaces.
+- **Valentine Heart** (`accent`, `danger`, `alert`): action surfaces, state borders, focus and non-text indicators.
 
-### Secondary
-- **Deep teal** (`accent-teal`): selected group, connection affordances, and icon surfaces. `accent-teal-soft` marks a selected media/source surface without replacing the primary selection color.
-
-### Tertiary
-- **Deep ruby** (`accent-ruby`): unavailable, error, and destructive states. Pair it with the primary text color; do not use it as small text on dark surfaces.
-
-### Neutral
-- **Rich black** (`bg`): main conversation canvas.
-- **Charcoal surfaces** (`panel`, `panel-raised`, `panel-soft`): sidebar, cards, composer, controls, and nested surface separation.
-- **Graphite dividers** (`border`, `border-soft`): 1px panel edges and list separators.
-- **Off-white and muted neutrals** (`text`, `muted`, `subtle`): primary copy, secondary copy, and disabled/quiet state.
-
-### Named Rules
-**The Semantic Accent Rule.** Teal identifies selection and connection affordances; forest marks enabled actions; ruby is reserved for errors, unavailable state, and destructive actions. Disabled actions return to neutral surfaces.
+### Contrast and States
+Use Existential Angst text on Valentine Heart actions; Steam text remains on Dark Charcoal and darker surfaces. Do not use Steam on Valentine Heart or Valentine Heart as normal text on Dark Charcoal. Errors and success retain readable copy and use borders, icons or labels as additional state cues; color alone never communicates status.
 
 ## Typography
 
@@ -211,9 +210,9 @@ The palette pairs a deep neutral ground with quiet charcoal layers and three acc
 
 ## Layout
 
-The supported minimum renderer viewport is 980×680. The desktop workspace keeps three columns: a fixed group sidebar, flexible conversation, and fixed details/member panel. At the minimum width the columns are 196px / flexible / 212px; above 1020px the sidebar and details widen to 204px and 220px, and above 1120px they use 216px and 246px. The selected group's header, conversation, and member roster stay synchronized.
+The main Electron window applies 150% page zoom while retaining its 1440×900 initial size and 980×680 minimum. At 100% Windows display scaling, these produce approximate CSS viewports of 960×600 and 653×453. The desktop workspace keeps three columns: a fixed group sidebar, flexible conversation, and fixed details/member panel. At the minimum CSS width the columns are 196px / about 245px / 212px.
 
-At widths up to 1020px, voice status stays above its wrapping controls. At heights up to 760px, vertical padding and message gaps tighten while the composer remains docked at the bottom. Group lists and details can scroll independently; the message history scrolls in the central panel. The 620px rule reflows dialog forms only; it is not a supported app-window width.
+The existing 1120px and 1020px breakpoints adapt columns and voice controls. At widths up to 680px, group forms stack and header, composer, and dialog actions can wrap. At heights up to 760px, vertical padding and message gaps tighten while the composer remains docked. Group lists and details scroll independently; message history scrolls in the central panel.
 
 ## Elevation & Depth
 
@@ -221,32 +220,36 @@ The interface is border-led and uses tonal layering rather than shadows. The mai
 
 ## Shapes
 
-Most interactive surfaces use restrained 4–7px corners; the group summary icon uses a 10px radius. Avatars and small status indicators are circular. Cards and controls use a single 1px border where separation is needed; the selected group row uses the teal surface and border together. Keyboard focus is a 2px off-white outline with a 2px offset.
+Most interactive surfaces use restrained 4–7px corners; the group summary icon uses a 10px radius. Avatars and small status indicators are circular. Cards and controls use a single 1px Iron border where separation is needed; selected group rows use a Dark Charcoal surface with Valentine Heart border. Keyboard focus remains visible and never relies on color alone.
+
+Profile photos are centered square crops encoded as 128 × 128 WebP thumbnails (≤48 KiB); the original input is limited to 8 MiB. A profile editor remains disabled offline, while cached group profiles render as read-only metadata.
 
 ## Components
 
 ### Buttons
-- **Primary actions:** forest surface for enabled send (31px) and call (32px) actions; standard dialog confirmations span the row at 40px, while group/media settings size them to context. Disabled actions use a neutral surface and subdued text.
-- **Secondary:** neutral bordered controls; hover shifts the surface and border toward teal.
-- **Destructive:** ruby surface with off-white text for removal, revocation, and leave actions.
-- **Focus:** retain the global visible outline; do not replace keyboard focus with color alone.
+- **Primary actions:** Valentine Heart surface with Existential Angst text for enabled send (31px), call (32px) and dialog-confirm actions (40px). Disabled actions use neutral surfaces and Steam text.
+- **Secondary:** Dark Charcoal controls with Iron borders; hover emphasizes the Valentine Heart border.
+- **Destructive:** Valentine Heart surface with Existential Angst text for removal, revocation and leave actions.
+- **Focus:** retain the visible focus outline and do not replace keyboard focus with color alone.
 
 ### Chips
-- **Selected group:** teal-filled row with off-white group name and real member count.
+- **Selected group:** Dark Charcoal row with Valentine Heart border, Steam group name and real member count.
 - **Status/privacy:** compact neutral chips with a divider or lock icon; use copy to state privacy and connection status.
-- **Connection state:** teal/forest/ruby only when the underlying service supplies that state; idle voice status is neutral.
+- **Connection state:** Valentine Heart only when the underlying service supplies that state; idle voice status is neutral.
 
 ### Cards / Containers
-- **Connection and share cards:** raised charcoal surface, 1px border, 6–7px corners, compact padding, no shadow.
-- **Offline banner:** neutral panel, inline icon and concise recovery/navigation action; use ruby only when the state is unavailable or erroneous.
-- **Composer:** raised surface with a teal focus border; the textarea itself remains transparent.
+- **Connection and share cards:** Dark Charcoal raised surface, 1px Iron border, 6–7px corners, compact padding, no shadow.
+- **Offline banner:** neutral panel, inline icon and concise recovery/navigation action; use Valentine Heart borders or icons when unavailable or erroneous.
+- **Composer:** Dark Charcoal surface with a Valentine Heart focus border; the textarea itself remains transparent.
 
 ### Inputs / Fields
-- **Message composer:** multiline textarea on the raised composer surface; placeholder uses the readable muted token. Focus changes the container border to teal.
-- **Dialog fields:** neutral panel fill, 1px divider, 5px corners; preserve the global focus outline and disabled state.
+- **Message composer:** multiline textarea on the raised composer surface; placeholder uses Steam. Focus changes the container border to Valentine Heart.
+
+- **Dialog fields:** Dark Charcoal fill, 1px Iron border, 5px corners; visible focus outline and disabled state remain.
+- **Profile fields:** optional display name (32 Unicode characters maximum) and square-cropped WebP avatar; saving is online-only and clearing both fields restores the PC pseudonym.
 
 ### Navigation
-- **Groups:** compact real-group rows at left; selected state is teal. No separate server rail or public discovery model.
+- **Groups:** compact real-group rows at left; selected state uses Dark Charcoal with a Valentine Heart border. No separate server rail or public discovery model.
 - **Conversation:** one active group's header and signed-message history occupy the flexible center.
 - **Details:** real group metadata, authorized members, and actions stay in the right panel. Presence is never inferred from membership.
 
@@ -254,13 +257,13 @@ Most interactive surfaces use restrained 4–7px corners; the group summary icon
 
 ### Do:
 - **Do** preserve the exact frontmatter palette roles when adding controls or states.
-- **Do** reserve forest green for enabled actions and use neutral styling when an action is disabled.
-- **Do** use teal for selection and connection affordances, with off-white labels on teal surfaces.
-- **Do** use ruby for destructive/unavailable/error states and pair it with off-white text.
+- **Do** use the six named palette colors and their semantic tokens; do not add shades.
+- **Do** use Existential Angst text on Valentine Heart buttons and Steam text on dark surfaces.
+- **Do** use Valentine Heart for focus, borders, icons and non-text status indicators.
 - **Do** distinguish authorized membership from measured reachability; keep focus visible and respect reduced motion.
 
 ### Don't:
-- **Don't** use dark teal or ruby as small text on dark surfaces.
+- **Don't** use Steam text on Valentine Heart or Valentine Heart as normal text on Dark Charcoal.
 - **Don't** color a disabled action as if it were ready.
 - **Don't** add public-server discovery, channels, invented members, presence, or messages to Larp.
 - **Don't** use shadows to separate panels; use the existing tonal layers and 1px borders.

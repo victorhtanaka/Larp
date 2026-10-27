@@ -19,19 +19,20 @@ Larp ships as a Windows x64 Electron desktop app with a Portuguese interface and
 
 ## Capabilities and Constraints
 - Create and manage private groups, issue and accept invitations, and remove members.
+- Set an optional display name and WebP avatar; profile visibility is limited to the user and members of their common private groups.
 - Exchange signed peer-to-peer messages, with local persistence and read-only cached history when offline.
 - Make voice calls and share a screen or window; system audio is optional and starts disabled.
-- Supabase stores identity, group, membership, invite, and screen-lease metadata; it does not store message history.
+- Supabase stores identity, group, membership, optional profile, invite, and screen-lease metadata; it does not store message history.
 - A direct STUN path is attempted without TURN. TURN is optional and uses separately configured free-provider credentials; no paid fallback is activated.
 - The interface must use real cloud or cached group data only. Do not invent groups, profiles, presence, members, or messages.
 
 ## Brand Commitments
 - Product name: Larp; interface language: Brazilian Portuguese.
-- The user selected this palette: background `#1A1A1A`, primary text `#F0F0F0`, teal accent `#004D61`, ruby accent `#822659`, and forest-green button/CTA `#3E5641`.
+- The user selected this six-color palette: Steam `#dddcde`, Valentine Heart `#be779e`, Iron `#5e5e5e`, Dark Charcoal `#323232`, Eerie Black `#1b1b1b`, and Existential Angst `#0a0a0a`.
 - Discord is the interaction/layout reference; Larp's product name and capabilities remain unchanged.
 
 ## Evidence on Hand
-The README, architecture notes, renderer, Supabase migrations, and P2P protocol code document the shipped behaviors. No user directory, public server discovery, user-chosen profile data, or synthetic conversation content is available to display.
+The README, architecture notes, renderer, Supabase migrations, and P2P protocol code document the shipped behaviors. Profile data is user-selected and scoped to private-group relationships; there is no user directory, public server discovery, or synthetic conversation content.
 
 ## Product Principles
 - Keep membership private and invitation-controlled.

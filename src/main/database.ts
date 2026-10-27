@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import type { GroupMember, GroupSummary } from '../shared/cloud-contracts';
 import type { SignedChatEnvelope } from '../shared/webrtc-protocol';
+import { userProfileFrom } from './profile-validation';
 import { createPeerMessageStore } from './peer-message-store';
 import type { LocalMessageStore } from '../renderer/rtc/message-sync';
 
@@ -63,10 +64,10 @@ const CLOUD_CACHE_SCHEMA = `
 
 function migrate(database: Database.Database): void {
   const currentVersion = database.pragma('user_version', { simple: true }) as number;
-  if (currentVersion > 4) {
+  if (currentVersion > 5) {
     throw new Error(`Versão de banco não suportada: ${currentVersion}`);
   }
-  if (currentVersion === 4) return;
+  if (currentVersion === 5) return;
 
   database.transaction(() => {
     if (currentVersion <= 1) {
@@ -75,9 +76,20 @@ function migrate(database: Database.Database): void {
     } else if (currentVersion === 2) {
       database.exec(CLOUD_CACHE_SCHEMA);
     }
-    database.exec('DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS participants; DROP TABLE IF EXISTS groups;');
-    database.pragma('user_version = 4');
+    if (currentVersion < 4) {
+      database.exec('DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS participants; DROP TABLE IF EXISTS groups;');
+    }
+    database.exec(`
+      ALTER TABLE cached_cloud_members
+        ADD COLUMN display_name TEXT
+          CHECK (display_name IS NULL OR (display_name = trim(display_name) AND length(display_name) BETWEEN 1 AND 32));
+      ALTER TABLE cached_cloud_members
+        ADD COLUMN avatar_data TEXT
+          CHECK (avatar_data IS NULL OR (length(avatar_data) BETWEEN 27 AND 66000 AND substr(avatar_data, 1, 23) = 'data:image/webp;base64,'));
+    `);
+    database.pragma('user_version = 5');
   })();
+
 }
 
 export function createLarpDatabase(databasePath: string): LocalLarpDatabase {
@@ -100,6 +112,7 @@ export function createLarpDatabase(databasePath: string): LocalLarpDatabase {
         || (member.role !== 'owner' && member.role !== 'member')) {
         throw new TypeError('A lista de membros em cache é inválida.');
       }
+      if (member.profile !== null) userProfileFrom(member.profile, member.userId);
       seen.add(member.userId);
     }
   };
@@ -107,11 +120,16 @@ export function createLarpDatabase(databasePath: string): LocalLarpDatabase {
     assertMemberList(members);
     database.prepare('DELETE FROM cached_cloud_members WHERE group_id = ?').run(groupId);
     const insert = database.prepare(`
-      INSERT INTO cached_cloud_members (group_id, user_id, public_key, joined_at, role)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO cached_cloud_members (
+        group_id, user_id, public_key, joined_at, role, display_name, avatar_data
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    for (const member of members) insert.run(groupId, member.userId, member.publicKey, member.joinedAt, member.role);
-    database.prepare('UPDATE cached_cloud_groups SET member_count = ? WHERE id = ?').run(members.length, groupId);
+    for (const member of members) {
+      insert.run(
+        groupId, member.userId, member.publicKey, member.joinedAt, member.role,
+        member.profile?.displayName ?? null, member.profile?.avatarData ?? null,
+      );
+    }
   };
   const replaceCloudCache = (
     groups: readonly GroupSummary[],
@@ -157,10 +175,31 @@ export function createLarpDatabase(databasePath: string): LocalLarpDatabase {
     SELECT id, name, created_at AS createdAt, member_count AS memberCount, role
     FROM cached_cloud_groups ORDER BY created_at, id
   `).all() as GroupSummary[];
-  const getCachedCloudMembers = (groupId: string): GroupMember[] => database.prepare(`
-    SELECT user_id AS userId, public_key AS publicKey, joined_at AS joinedAt, role
-    FROM cached_cloud_members WHERE group_id = ? ORDER BY joined_at, user_id
-  `).all(groupId) as GroupMember[];
+  const getCachedCloudMembers = (groupId: string): GroupMember[] => {
+    const rows = database.prepare(`
+      SELECT
+        user_id AS userId,
+        public_key AS publicKey,
+        joined_at AS joinedAt,
+        role,
+        display_name AS displayName,
+        avatar_data AS avatarData
+      FROM cached_cloud_members WHERE group_id = ? ORDER BY joined_at, user_id
+    `).all(groupId) as Array<{
+      userId: string;
+      publicKey: string;
+      joinedAt: string;
+      role: 'owner' | 'member';
+      displayName: string | null;
+      avatarData: string | null;
+    }>;
+    return rows.map(({ displayName, avatarData, ...member }) => ({
+      ...member,
+      profile: displayName === null && avatarData === null
+        ? null
+        : userProfileFrom({ userId: member.userId, displayName, avatarData }, member.userId),
+    }));
+  };
   const getCachedMessages = async (groupId: string, perAuthorLimit = 100): Promise<SignedChatEnvelope[]> => {
     if (typeof groupId !== 'string' || !groupId || groupId.length > 80
       || !Number.isSafeInteger(perAuthorLimit) || perAuthorLimit < 1 || perAuthorLimit > 100) {

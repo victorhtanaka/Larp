@@ -27,7 +27,7 @@ function createUpdaterWindow(): BrowserWindow {
     frame: false,
     show: false,
     title: 'Larp — Atualização',
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#0a0a0a',
     icon: getAppIconPath(),
     webPreferences: {
       preload: join(__dirname, 'updater-preload.cjs'),

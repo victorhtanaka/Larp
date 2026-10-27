@@ -4,19 +4,24 @@
   "title": "Design System: Larp",
   "extensions": {
     "colorMeta": {
-      "bg": { "role": "neutral", "displayName": "Rich Black", "canonical": "#1A1A1A", "tonalRamp": ["oklch(15% 0.000 0)", "oklch(27% 0.000 0)", "oklch(39% 0.000 0)", "oklch(51% 0.000 0)", "oklch(63% 0.000 0)", "oklch(75% 0.000 0)", "oklch(87% 0.000 0)", "oklch(95% 0.000 0)"] },
-      "text": { "role": "neutral", "displayName": "Off-white", "canonical": "#F0F0F0", "tonalRamp": ["oklch(15% 0.000 0)", "oklch(27% 0.000 0)", "oklch(39% 0.000 0)", "oklch(51% 0.000 0)", "oklch(63% 0.000 0)", "oklch(75% 0.000 0)", "oklch(87% 0.000 0)", "oklch(95% 0.000 0)"] },
-      "panel": { "role": "neutral", "displayName": "Charcoal Panel", "canonical": "#202225", "tonalRamp": ["oklch(15% 0.006 258)", "oklch(27% 0.006 258)", "oklch(39% 0.006 258)", "oklch(51% 0.006 258)", "oklch(63% 0.006 258)", "oklch(75% 0.006 258)", "oklch(87% 0.006 258)", "oklch(95% 0.006 258)"] },
-      "panel-raised": { "role": "neutral", "displayName": "Raised Charcoal", "canonical": "#27292D", "tonalRamp": ["oklch(15% 0.008 264)", "oklch(27% 0.008 264)", "oklch(39% 0.008 264)", "oklch(51% 0.008 264)", "oklch(63% 0.008 264)", "oklch(75% 0.008 264)", "oklch(87% 0.008 264)", "oklch(95% 0.008 264)"] },
-      "panel-soft": { "role": "neutral", "displayName": "Soft Charcoal", "canonical": "#2B2D31", "tonalRamp": ["oklch(15% 0.008 264)", "oklch(27% 0.008 264)", "oklch(39% 0.008 264)", "oklch(51% 0.008 264)", "oklch(63% 0.008 264)", "oklch(75% 0.008 264)", "oklch(87% 0.008 264)", "oklch(95% 0.008 264)"] },
-      "border": { "role": "neutral", "displayName": "Graphite Border", "canonical": "#383B41", "tonalRamp": ["oklch(15% 0.011 264)", "oklch(27% 0.011 264)", "oklch(39% 0.011 264)", "oklch(51% 0.011 264)", "oklch(63% 0.011 264)", "oklch(75% 0.011 264)", "oklch(87% 0.011 264)", "oklch(95% 0.011 264)"] },
-      "border-soft": { "role": "neutral", "displayName": "Soft Graphite Divider", "canonical": "#303238", "tonalRamp": ["oklch(15% 0.011 271)", "oklch(27% 0.011 271)", "oklch(39% 0.011 271)", "oklch(51% 0.011 271)", "oklch(63% 0.011 271)", "oklch(75% 0.011 271)", "oklch(87% 0.011 271)", "oklch(95% 0.011 271)"] },
-      "muted": { "role": "neutral", "displayName": "Muted Silver", "canonical": "#B3B6BD", "tonalRamp": ["oklch(15% 0.010 267)", "oklch(27% 0.010 267)", "oklch(39% 0.010 267)", "oklch(51% 0.010 267)", "oklch(63% 0.010 267)", "oklch(75% 0.010 267)", "oklch(87% 0.010 267)", "oklch(95% 0.010 267)"] },
-      "subtle": { "role": "neutral", "displayName": "Subtle Silver", "canonical": "#92969E", "tonalRamp": ["oklch(15% 0.013 264)", "oklch(27% 0.013 264)", "oklch(39% 0.013 264)", "oklch(51% 0.013 264)", "oklch(63% 0.013 264)", "oklch(75% 0.013 264)", "oklch(87% 0.013 264)", "oklch(95% 0.013 264)"] },
-      "accent": { "role": "primary", "displayName": "Forest CTA", "canonical": "#3E5641", "tonalRamp": ["oklch(15% 0.043 148)", "oklch(27% 0.045 148)", "oklch(39% 0.045 148)", "oklch(51% 0.045 148)", "oklch(63% 0.045 148)", "oklch(75% 0.045 148)", "oklch(87% 0.045 148)", "oklch(95% 0.045 148)"] },
-      "accent-teal": { "role": "secondary", "displayName": "Deep Teal", "canonical": "#004D61", "tonalRamp": ["oklch(15% 0.028 223)", "oklch(27% 0.050 223)", "oklch(39% 0.072 223)", "oklch(51% 0.072 223)", "oklch(63% 0.072 223)", "oklch(75% 0.072 223)", "oklch(87% 0.072 223)", "oklch(95% 0.033 223)"] },
-      "accent-teal-soft": { "role": "secondary", "displayName": "Soft Teal Surface", "canonical": "#153641", "tonalRamp": ["oklch(15% 0.028 223)", "oklch(27% 0.043 223)", "oklch(39% 0.043 223)", "oklch(51% 0.043 223)", "oklch(63% 0.043 223)", "oklch(75% 0.043 223)", "oklch(87% 0.043 223)", "oklch(95% 0.033 223)"] },
-      "accent-ruby": { "role": "tertiary", "displayName": "Deep Ruby", "canonical": "#822659", "tonalRamp": ["oklch(15% 0.063 350)", "oklch(27% 0.113 350)", "oklch(39% 0.136 350)", "oklch(51% 0.136 350)", "oklch(63% 0.136 350)", "oklch(75% 0.136 350)", "oklch(87% 0.082 350)", "oklch(95% 0.029 350)"] }
+      "bg": { "role": "neutral", "displayName": "Existential Angst", "canonical": "#0a0a0a" },
+      "text": { "role": "neutral", "displayName": "Steam", "canonical": "#dddcde" },
+      "panel": { "role": "neutral", "displayName": "Eerie Black", "canonical": "#1b1b1b" },
+      "panel-raised": { "role": "neutral", "displayName": "Dark Charcoal", "canonical": "#323232" },
+      "panel-soft": { "role": "neutral", "displayName": "Dark Charcoal", "canonical": "#323232" },
+      "border": { "role": "neutral", "displayName": "Iron", "canonical": "#5e5e5e" },
+      "border-soft": { "role": "neutral", "displayName": "Iron", "canonical": "#5e5e5e" },
+      "muted": { "role": "neutral", "displayName": "Steam", "canonical": "#dddcde" },
+      "subtle": { "role": "neutral", "displayName": "Steam", "canonical": "#dddcde" },
+      "accent": { "role": "primary", "displayName": "Valentine Heart", "canonical": "#be779e" },
+      "danger": { "role": "tertiary", "displayName": "Valentine Heart", "canonical": "#be779e" },
+      "alert": { "role": "tertiary", "displayName": "Valentine Heart", "canonical": "#be779e" },
+      "steam": { "role": "neutral", "displayName": "Steam", "canonical": "#dddcde" },
+      "valentine-heart": { "role": "primary", "displayName": "Valentine Heart", "canonical": "#be779e" },
+      "iron": { "role": "neutral", "displayName": "Iron", "canonical": "#5e5e5e" },
+      "dark-charcoal": { "role": "neutral", "displayName": "Dark Charcoal", "canonical": "#323232" },
+      "eerie-black": { "role": "neutral", "displayName": "Eerie Black", "canonical": "#1b1b1b" },
+      "existential-angst": { "role": "neutral", "displayName": "Existential Angst", "canonical": "#0a0a0a" }
     },
     "typographyMeta": {
       "display": { "displayName": "Brand Mark", "purpose": "The single Georgia initial in the Larp mark; interface titles remain sans-serif." },
@@ -26,7 +31,7 @@
       "message": { "displayName": "Message Copy", "purpose": "Signed conversation text." },
       "button": { "displayName": "Primary Send Action", "purpose": "Enabled signed-message send action." },
       "call": { "displayName": "Voice Call Action", "purpose": "Enabled voice-call join action." },
-      "confirm": { "displayName": "Dialog Confirmation", "purpose": "Forest action; width varies by dialog context." },
+      "confirm": { "displayName": "Dialog Confirmation", "purpose": "Valentine Heart action; width varies by dialog context." },
       "control": { "displayName": "Secondary Control", "purpose": "Neutral controls and destructive actions." },
       "group-name": { "displayName": "Group Name", "purpose": "The selected group row." },
       "input": { "displayName": "Composer Input", "purpose": "Signed-message entry." },
@@ -42,7 +47,7 @@
     "breakpoints": [
       { "name": "desktop-wide", "value": "1120px" },
       { "name": "desktop-compact", "value": "1020px" },
-      { "name": "dialog-stack", "value": "620px" },
+      { "name": "dialog-stack", "value": "680px" },
       { "name": "short-window", "value": "760px" }
     ]
   },
@@ -51,9 +56,9 @@
       "name": "Primary Action",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Enabled signed-message send action uses the forest accent; disabled actions return to neutral.",
+      "description": "Enabled signed-message send action uses Valentine Heart with Existential Angst text; disabled actions return to neutral.",
       "html": "<button class=\"ds-button-primary\" type=\"button\">Enviar P2P</button>",
-      "css": ".ds-button-primary { min-height: 31px; padding: 0 10px; color: var(--text); background: var(--accent); border: 0; border-radius: 5px; font: 750 9px Inter, 'Segoe UI', sans-serif; transition: filter 140ms ease, opacity 140ms ease; } .ds-button-primary:hover:not(:disabled) { filter: brightness(1.12); } .ds-button-primary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-primary:disabled { color: var(--subtle); background: var(--panel-soft); opacity: 1; cursor: not-allowed; }"
+      "css": ".ds-button-primary { min-height: 31px; padding: 0 10px; color: var(--bg); background: var(--accent); border: 0; border-radius: 5px; font: 750 9px Inter, 'Segoe UI', sans-serif; transition: opacity 140ms ease; } .ds-button-primary:hover:not(:disabled) { outline: 1px solid var(--text); outline-offset: 1px; } .ds-button-primary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-primary:disabled { color: var(--subtle); background: var(--panel-soft); opacity: 1; cursor: not-allowed; }"
     },
     {
       "name": "Voice Call Action",
@@ -61,15 +66,15 @@
       "refersTo": "button-call",
       "description": "Enabled voice-call join action; disabled styling is neutral until the P2P path is ready.",
       "html": "<button class=\"ds-call-action\" type=\"button\">Entrar na chamada</button>",
-      "css": ".ds-call-action { min-height: 32px; padding: 0 10px; color: var(--text); background: var(--accent); border: 1px solid var(--accent); border-radius: 5px; font: 700 9px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-call-action:hover:not(:disabled) { filter: brightness(1.12); } .ds-call-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-call-action:disabled { color: var(--subtle); background: var(--panel-soft); border-color: var(--border); cursor: not-allowed; }"
+      "css": ".ds-call-action { min-height: 32px; padding: 0 10px; color: var(--bg); background: var(--accent); border: 1px solid var(--accent); border-radius: 5px; font: 700 9px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-call-action:hover:not(:disabled) { outline: 1px solid var(--text); outline-offset: 1px; } .ds-call-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-call-action:disabled { color: var(--subtle); background: var(--panel-soft); border-color: var(--border); cursor: not-allowed; }"
     },
     {
       "name": "Dialog Confirmation",
       "kind": "button",
       "refersTo": "button-confirm",
-      "description": "Forest action confirms a dialog task; standard dialogs span the row, while group/media dialogs size to context.",
+      "description": "Valentine Heart action confirms a dialog task; standard dialogs span the row, while group/media dialogs size to context.",
       "html": "<button class=\"ds-dialog-confirm\" type=\"button\">Concluir</button>",
-      "css": ".ds-dialog-confirm { display: block; width: 100%; min-height: 40px; color: var(--text); background: var(--accent); border: 0; border-radius: 6px; font: 720 11px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-dialog-confirm:hover:not(:disabled) { filter: brightness(1.12); } .ds-dialog-confirm:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-dialog-confirm:disabled { opacity: .55; cursor: not-allowed; }"
+      "css": ".ds-dialog-confirm { display: block; width: 100%; min-height: 40px; color: var(--bg); background: var(--accent); border: 0; border-radius: 6px; font: 720 11px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-dialog-confirm:hover:not(:disabled) { outline: 1px solid var(--text); outline-offset: 1px; } .ds-dialog-confirm:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-dialog-confirm:disabled { opacity: .55; cursor: not-allowed; }"
     },
     {
       "name": "Secondary Control",
@@ -77,15 +82,15 @@
       "refersTo": "button-secondary",
       "description": "Neutral control for device, dialog, and navigation actions.",
       "html": "<button class=\"ds-button-secondary\" type=\"button\">Dispositivos</button>",
-      "css": ".ds-button-secondary { min-height: 38px; padding: 0 11px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font: 650 10px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-button-secondary:hover:not(:disabled) { background: var(--panel-soft); border-color: var(--accent-teal); } .ds-button-secondary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-secondary:disabled { opacity: .55; cursor: not-allowed; }"
+      "css": ".ds-button-secondary { min-height: 38px; padding: 0 11px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font: 650 10px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-button-secondary:hover:not(:disabled) { background: var(--panel-soft); border-color: var(--accent); } .ds-button-secondary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-secondary:disabled { opacity: .55; cursor: not-allowed; }"
     },
     {
       "name": "Destructive Action",
       "kind": "button",
       "refersTo": "button-danger",
-      "description": "Ruby treatment for revoking an invitation or leaving/removing a group member.",
+      "description": "Valentine Heart treatment for revoking an invitation or leaving/removing a group member.",
       "html": "<button class=\"ds-button-danger\" type=\"button\">Sair do grupo</button>",
-      "css": ".ds-button-danger { min-height: 38px; padding: 0 11px; color: var(--text); background: var(--accent-ruby); border: 1px solid var(--accent-ruby); border-radius: 6px; font: 650 10px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-button-danger:hover:not(:disabled) { filter: brightness(1.12); } .ds-button-danger:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-danger:disabled { opacity: .55; cursor: not-allowed; }"
+      "css": ".ds-button-danger { min-height: 38px; padding: 0 11px; color: var(--bg); background: var(--danger); border: 1px solid var(--danger); border-radius: 6px; font: 650 10px Inter, 'Segoe UI', sans-serif; cursor: pointer; } .ds-button-danger:hover:not(:disabled) { outline: 1px solid var(--text); outline-offset: 1px; } .ds-button-danger:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-button-danger:disabled { opacity: .55; cursor: not-allowed; }"
     },
     {
       "name": "Message Composer",
@@ -93,15 +98,15 @@
       "refersTo": "composer",
       "description": "Multiline signed-message entry on a raised surface; focus is carried by the container border.",
       "html": "<div class=\"ds-composer\"><textarea aria-label=\"Mensagem\" placeholder=\"Escreva uma mensagem assinada…\"></textarea></div>",
-      "css": ".ds-composer { padding: 10px 11px 9px; background: var(--panel-raised); border: 1px solid var(--border); border-radius: 7px; transition: border-color 140ms ease; } .ds-composer:focus-within { border-color: var(--accent-teal); } .ds-composer textarea { display: block; width: 100%; min-height: 43px; padding: 0; color: var(--text); background: transparent; border: 0; font: 400 11px/1.55 Inter, 'Segoe UI', sans-serif; resize: vertical; } .ds-composer textarea::placeholder { color: var(--muted); opacity: 1; } .ds-composer textarea:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }"
+      "css": ".ds-composer { padding: 10px 11px 9px; background: var(--panel-raised); border: 1px solid var(--border); border-radius: 7px; transition: border-color 140ms ease; } .ds-composer:focus-within { border-color: var(--accent); } .ds-composer textarea { display: block; width: 100%; min-height: 43px; padding: 0; color: var(--text); background: transparent; border: 0; font: 400 11px/1.55 Inter, 'Segoe UI', sans-serif; resize: vertical; } .ds-composer textarea::placeholder { color: var(--muted); opacity: 1; } .ds-composer textarea:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }"
     },
     {
       "name": "Selected Group Row",
       "kind": "nav",
       "refersTo": "group-row-selected",
-      "description": "The selected real private group is identified by a teal row and a consistent chat icon.",
+      "description": "The selected real private group is identified by a Dark Charcoal row, Valentine Heart border and consistent chat icon.",
       "html": "<button class=\"ds-group-selected\" type=\"button\" aria-current=\"page\"><span class=\"ds-group-icon\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 2 1-4.5A7.5 7.5 0 1 1 20 11.5Z\"/><path d=\"M7 11h.01M12 11h.01M17 11h.01\"/></svg></span><span class=\"ds-group-copy\"><strong>Grupo privado</strong><small>Integrantes autorizados</small></span></button>",
-      "css": ".ds-group-selected { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 48px; padding: 6px 9px; color: var(--text); text-align: left; background: var(--accent-teal); border: 1px solid var(--accent-teal); border-radius: 5px; cursor: pointer; } .ds-group-selected:hover { background: var(--accent-teal); } .ds-group-selected:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-group-icon { display: grid; flex: 0 0 auto; width: 32px; height: 32px; place-items: center; color: var(--text); background: var(--accent-teal); border-radius: 6px; } .ds-group-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; } .ds-group-copy { display: grid; gap: 4px; } .ds-group-copy strong { color: var(--text); font: 650 11px Inter, 'Segoe UI', sans-serif; } .ds-group-copy small { color: var(--muted); font: 400 9px Inter, 'Segoe UI', sans-serif; }"
+      "css": ".ds-group-selected { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 48px; padding: 6px 9px; color: var(--text); text-align: left; background: var(--panel-soft); border: 1px solid var(--accent); border-radius: 5px; cursor: pointer; } .ds-group-selected:hover { background: var(--panel-soft); } .ds-group-selected:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; } .ds-group-icon { display: grid; flex: 0 0 auto; width: 32px; height: 32px; place-items: center; color: var(--bg); background: var(--accent); border-radius: 6px; } .ds-group-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; } .ds-group-copy { display: grid; gap: 4px; } .ds-group-copy strong { color: var(--text); font: 650 11px Inter, 'Segoe UI', sans-serif; } .ds-group-copy small { color: var(--muted); font: 400 9px Inter, 'Segoe UI', sans-serif; }"
     },
     {
       "name": "Privacy Chip",
@@ -122,33 +127,34 @@
     {
       "name": "Local Member Row",
       "kind": "custom",
-      "description": "A real local identity is distinct from unverified remote presence.",
+      "description": "A real local identity is distinct from unverified remote presence; an authorized shared profile may replace the displayed name and avatar.",
       "html": "<div class=\"ds-member-row\"><span class=\"ds-member-avatar\">PC</span><span class=\"ds-member-copy\"><strong>Este computador</strong><small>Responsável · neste PC</small></span><span class=\"ds-member-state\" aria-label=\"Presença neste PC\"></span></div>",
-      "css": ".ds-member-row { display: flex; align-items: center; gap: 8px; min-width: 0; } .ds-member-avatar { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; color: var(--text); background: var(--accent); border-radius: 50%; font: 750 8px Inter, 'Segoe UI', sans-serif; } .ds-member-copy { display: grid; min-width: 0; flex: 1; gap: 3px; } .ds-member-copy strong { overflow: hidden; color: var(--text); font: 620 9px Inter, 'Segoe UI', sans-serif; text-overflow: ellipsis; white-space: nowrap; } .ds-member-copy small { color: var(--muted); font: 400 8px Inter, 'Segoe UI', sans-serif; } .ds-member-state { width: 7px; height: 7px; flex: 0 0 auto; background: var(--accent); border-radius: 50%; }"
+      "css": ".ds-member-row { display: flex; align-items: center; gap: 8px; min-width: 0; } .ds-member-avatar { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; color: var(--bg); background: var(--accent); border-radius: 50%; font: 750 8px Inter, 'Segoe UI', sans-serif; } .ds-member-copy { display: grid; min-width: 0; flex: 1; gap: 3px; } .ds-member-copy strong { overflow: hidden; color: var(--text); font: 620 9px Inter, 'Segoe UI', sans-serif; text-overflow: ellipsis; white-space: nowrap; } .ds-member-copy small { color: var(--muted); font: 400 8px Inter, 'Segoe UI', sans-serif; } .ds-member-state { width: 7px; height: 7px; flex: 0 0 auto; background: var(--accent); border-radius: 50%; }"
     }
   ],
   "narrative": {
     "northStar": "The Private Group Room",
-    "overview": "Larp is a compact, invitation-based room for friends who already know whom they want to talk to. The interface favors shared context and clear permissions over discovery: a group is private, voice and screen sharing start only after an explicit action, and message history stays on members' PCs.\n\nThe spatial language borrows Discord's scan order—real groups at left, one active conversation in the center, and group members and actions at right—without importing a public-server browser or invented channel hierarchy. Dark surfaces stay compact and legible; teal marks selection and connection, forest green marks enabled actions, and ruby carries failure or destructive meaning.",
+    "overview": "Larp is a compact, invitation-based room for friends who already know whom they want to talk to. The interface favors shared context and clear permissions over discovery: a group is private, voice and screen sharing start only after an explicit action, and message history stays on members' PCs.\n\nThe spatial language borrows Discord's scan order—real groups at left, one active conversation in the center, and group members and actions at right—without importing a public-server browser or invented channel hierarchy. The six-color palette uses Dark Charcoal and Eerie Black surfaces, Steam copy, Iron dividers, Valentine Heart accents and Existential Angst as the ground.",
     "keyCharacteristics": [
       "Three-pane Windows desktop workspace: groups, conversation, group details and members.",
       "Invitation-based privacy and real membership/connection states.",
+      "An optional shared profile adds a display name and WebP avatar only to authorized member and message views.",
       "Layered near-black surfaces, thin separators, restrained semantic accents.",
       "Visible keyboard focus and reduced-motion support."
     ],
     "rules": [
-      { "name": "The Semantic Accent Rule", "body": "Teal identifies selection and connection affordances; forest marks enabled actions; ruby is reserved for errors, unavailable state, and destructive actions. Disabled actions return to neutral surfaces.", "section": "colors" },
-      { "name": "The Group Name Leads Rule", "body": "The selected group title is the single headline; membership and connection details remain secondary.", "section": "typography" }
+      { "name": "The Semantic Accent Rule", "body": "Valentine Heart identifies actions, focus, borders and non-text status indicators; Steam copy stays on dark surfaces. Text on Valentine Heart uses Existential Angst. Disabled actions return to neutral surfaces.", "section": "colors" },
+      { "name": "The Group Name Leads Rule", "body": "The selected group title is the single headline; membership and connection details remain secondary.", "section": "typography" },
+      { "name": "The Shared Profile Privacy Rule", "body": "Display names and cropped WebP avatars are optional and visible only to the owner and members of common private groups. Clearing fields restores the PC pseudonym; signed envelopes remain unchanged.", "section": "privacy" }
     ],
     "dos": [
       "Do preserve the exact frontmatter palette roles when adding controls or states.",
-      "Do reserve forest green for enabled actions and use neutral styling when an action is disabled.",
-      "Do use teal for selection and connection affordances, with off-white labels on teal surfaces.",
-      "Do use ruby for destructive/unavailable/error states and pair it with off-white text.",
+      "Do reserve Valentine Heart for actions and non-text accents while preserving readable Steam text on dark surfaces.",
+      "Do use Existential Angst text on Valentine Heart buttons.",
       "Do distinguish authorized membership from measured reachability; keep focus visible and respect reduced motion."
     ],
     "donts": [
-      "Don't use dark teal or ruby as small text on dark surfaces.",
+      "Don't use Steam text on Valentine Heart or Valentine Heart as normal text on Dark Charcoal.",
       "Don't color a disabled action as if it were ready.",
       "Don't add public-server discovery, channels, invented members, presence, or messages to Larp.",
       "Don't use shadows to separate panels; use the existing tonal layers and 1px borders."

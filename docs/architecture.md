@@ -13,12 +13,14 @@ Aplicativo desktop Windows x64 para grupos privados de até seis participantes. 
 | Preload | API tipada mínima; sem expor Node, IPC genérico ou credenciais ao renderer | `src/preload/` |
 | Renderer | Interface pt-BR, malha WebRTC, chat e controles de mídia | `src/renderer/` |
 | Protocolo compartilhado | Envelopes assinados e versionados para chat, ACK, sincronização e sinalização | `src/shared/webrtc-protocol.ts` |
-| Banco remoto | Identidade pública, grupo, associação, convites e concessão de tela; políticas RLS | `supabase/migrations/` |
+| Banco remoto | Identidade pública, grupo, associação, perfis, convites e concessão de tela; políticas RLS | `supabase/migrations/` |
 | Edge Function | Credenciais TURN autorizadas por associação ativa | `supabase/functions/turn-credentials/` |
 
 O SQLite fica em `app.getPath('userData')/larp.sqlite`. Mensagens não são enviadas ao banco Supabase. `identity.json` guarda a chave privada Ed25519 criptografada por `safeStorage`; `supabase-session.json` guarda a sessão anônima criptografada pelo mesmo mecanismo. Perder esses arquivos remove a identidade local; não há recuperação ou transferência entre PCs.
 
 Na atualização do SQLite para a versão 4, o Larp apaga permanentemente as tabelas locais antigas `messages`, `participants` e `groups`, incluindo anotações salvas dentro dos grupos de demonstração; essas anotações não são exportadas. As tabelas de cache Supabase e os envelopes/ACKs P2P assinados permanecem intactos.
+
+SQLite v5 adiciona `display_name` e `avatar_data` anuláveis a `cached_cloud_members`. A migração v4 preserva grupos/membros em cache, mensagens P2P assinadas e ACKs; perfis ausentes permanecem nulos.
 
 ## Identidade, grupos e custo
 
@@ -26,13 +28,21 @@ A primeira execução cria uma chave Ed25519 local. A chave pública é registra
 
 As migrações em ordem definem políticas RLS, funções transacionais e índices. Convites guardam somente hash, expiram em até sete dias e são de uso único. A aceitação bloqueia a linha do grupo e conta membros na mesma transação, impondo seis participantes mesmo sob entrada simultânea. Proprietários podem revogar convites/remover membros; ao sair, o proprietário é transferido ao membro mais antigo ou o grupo vazio é removido. A associação e a reserva de tela são verificadas pelo servidor.
 
+## Perfis compartilhados
+
+`public.larp_user_profiles` armazena um nome opcional e uma URI de dados WebP por usuário autenticado. `private.can_view_profile` permite leitura apenas pelo dono e por membros autenticados que compartilham um grupo privado com ele. As políticas de inserção e atualização vinculam `user_id` a `auth.uid()`; privilégios por coluna impedem alterar o dono. RLS está ativada e forçada; `anon` não recebe privilégios na tabela.
+
+O renderer envia somente `displayName` e `avatarData`; o IPC deriva o ID do usuário a partir da sessão autenticada. Nomes são aparados e limitados a 32 caracteres Unicode. O seletor aceita imagens de origem até 8 MiB e armazena uma miniatura WebP centralizada de 128 × 128, até 48 KiB. Limpar os dois campos restaura o pseudônimo do PC. Perfis apenas decoram as visualizações atuais de membros e mensagens; envelopes assinados e histórico local permanecem inalterados.
+
+O SQLite armazena esses campos de perfil junto a cada membro de grupo para exibição offline; perfis em cache são somente leitura. A versão 5 adiciona colunas anuláveis sem descartar o cache v4 nem o histórico assinado.
+
 O custo zero depende da escolha e configuração das contas do operador. O aplicativo não ativa planos pagos, não instala fallback pago e não tem mecanismo de cobrança. Supabase ou ExpressTURN podem suspender serviço por limite, inatividade ou mudança de termos. Operadores devem verificar que não há cartão, upgrade automático ou forma de cobrança antes da implantação. Quando Supabase não está disponível, o histórico local continua acessível; sem TURN, o aplicativo tenta conexão direta por STUN.
 
 ## Sinalização e malha P2P
 
 O cliente autentica uma sessão anônima Supabase e usa canais Realtime privados `group:<uuid>`, autorizados por RLS para membros atuais. A sinalização é endereçada ao destinatário, versionada e assinada; envelopes inválidos, fora do grupo, enviados por usuário não associado ou acima do limite de tamanho são descartados. Candidatos ICE são enviados em lotes limitados.
 
-A associação é atualizada por eventos Realtime da tabela `larp_group_members`; a migração 0004 habilita publicação e identidade completa de linha. Ao receber evento, cada cliente relê a associação pela função autenticada `list_group_members`, atualiza a malha e encerra conexões de membros removidos. Sinalização de um remetente ainda desconhecido causa uma releitura autorizada antes da entrega. O estado do canal não concede associação por si só.
+Alterações de associação e perfil usam eventos Realtime. Mudanças de associação chegam de `larp_group_members`; mudanças de perfil, de `larp_user_profiles`. A migração 0004 publica eventos de associação e a migração de perfil publica eventos de perfil. Em ambos os casos, o cliente ignora o conteúdo do evento e relê a associação e os perfis visíveis usando RPC autenticada e RLS antes de atualizar a malha e o cache. O estado do canal não concede associação nem visibilidade de perfil.
 
 Cada participante estabelece no máximo cinco conexões WebRTC. A ordenação do identificador escolhe um único dono do RTCDataChannel por par; `ordered: true` e retransmissão confiável são exigidos. A negociação trata ofertas simultâneas por rollback/polite-peer, associa respostas a IDs de negociação, agrupa candidatos ICE, reinicia ICE e tenta reconectar pares desconectados. STUN padrão é `stun:stun.l.google.com:19302`; TURN é opcional e só chega ao cliente autenticado após validação de associação pela Edge Function.
 
@@ -57,24 +67,24 @@ TURN é entregue pela Edge Function `turn-credentials`, que valida JWT e associa
 
 ## Segurança Electron
 
-A janela usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação externa e janelas novas são bloqueadas. O preload oferece métodos tipados e específicos. O processo principal valida janela e frame de origem, UUIDs, limites de texto/envelope e assinaturas antes das operações. Permissões de microfone e display são restritas à janela principal; tela exige uma seleção de uso único no processo principal. Ao fechar a janela principal, a limpeza da captura usa o ID de `webContents` salvo antes de `closed`, sem acessar o `BrowserWindow` já destruído. Credenciais administrativas nunca são expostas ao renderer.
+O `BrowserWindow` usa `contextIsolation`, sandbox e `nodeIntegration: false`; navegação externa e janelas novas são bloqueadas. O preload oferece métodos tipados e específicos. O processo principal valida janela e frame de origem, UUIDs, limites de texto/envelope, formato dos campos de perfil e conteúdo do avatar. O IPC de perfil não aceita ID de usuário; o serviço usa a identidade Supabase autenticada. Permissões de microfone e display são restritas à janela principal; a captura de tela exige seleção de uso único no processo principal. Ao fechar a janela, a limpeza da captura usa o ID salvo de `webContents` sem acessar o `BrowserWindow` destruído. Credenciais administrativas nunca são expostas ao renderer.
 
 ## Configuração e verificação
 
-A implantação exige Auth anônimo Supabase, migrações ordenadas, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. A migration `20261026230136_fix_screen_share_lease_timestamp.sql` corrige `expires_at` para usar uma expressão `timestamptz`; ela já foi aplicada ao projeto Supabase configurado no app. Outros projetos existentes precisam aplicá-la antes de reservar compartilhamento de tela. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
+A implantação exige Auth anônimo Supabase, migrações ordenadas, chave pública do cliente e, opcionalmente, Edge Function TURN com segredos da conta gratuita. A migration `20261026230136_fix_screen_share_lease_timestamp.sql` corrige `expires_at` para usar uma expressão `timestamptz`; ela já foi aplicada ao projeto Supabase configurado no app. Outros projetos existentes precisam aplicá-la antes de reservar compartilhamento de tela. A migration `20261027004027_larp_user_profiles.sql` também precisa estar aplicada antes de iniciar esta versão; sem a tabela de perfis, a listagem de membros falha. Ver instruções em [`../README.md`](../README.md). A política de custo zero é operacional: verificar limites e ausência de upgrade/cobrança no painel de cada provedor.
 
-Verificação local executada em Windows x64 com Node 24.15: `npm run typecheck`, os sete testes de `npm test` e `npm run make` passaram; o maker gerou os artefatos Squirrel. `npm run test:supabase` exige credenciais públicas de staging isolado e pausa para a fixture expirada. O workflow de release está configurado, mas nenhuma execução GitHub Actions foi disparada nesta validação.
+Verificação deste incremento em Windows x64: `npm run typecheck`, `npm test` (12 testes), `npm run package` e `npx supabase test db` (14 testes pgTAP) passaram. `npx supabase start` aplicou localmente todas as migrações. O ensaio `npm run test:supabase` não completou: a Auth anônima está desabilitada na configuração local; não há credenciais de staging para repetir o fluxo. O workflow de release está configurado, mas nenhuma execução GitHub Actions foi disparada nesta validação.
 
 | Ensaio | Estado |
 |---|---|
-| Tipagem e testes automatizados | `npm run typecheck` e `npm test`: aprovados; sete testes locais, sem prova de rede remota |
-| `npm run make` Windows x64 | Aprovado; `RELEASES`, um `.nupkg` e `Larp-0.2.1 Setup.exe` gerados; matcher do workflow aceitou os três |
+| Tipagem, testes e build | `npm run typecheck`, `npm test` (12 testes) e `npm run package` Windows x64: aprovados; `npx supabase test db`: 14 testes pgTAP aprovados localmente. Sem prova de rede remota |
+| Electron: zoom e layout | Runtime mediu `devicePixelRatio=1.5`; em viewport CSS 653×453, as colunas mediram 196 / 245,33 / 212 px e `documentElement.scrollWidth` permaneceu em 653 px |
 | Feed updater e Setup publicado | Feed atual e `RELEASES` de `v0.2.1` coincidem em hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7` e tamanho `165719082`; Setup 0.2.0/0.2.1 baixados em streaming conferidos pelos digests SHA-256 da API (`78f0d4c569246d313ec1e7415fc5f9ed62f2bafd30fe2b8e499a2115cab2c2f2` e `70e2d85b534ac1c5dc3b011390ac5406fd6c07289b7ca12a12303c4b9be2ea30`) |
 | Instalação, upgrade, Pesquisa e uninstall | Bloqueados: sem `WindowsSandbox.exe`, máquina física e sem elevação para criar perfil descartável; nenhum Setup ou updater foi executado |
-| Supabase RLS, convites, leases e corrida | Harness isolado cobre aquisição exclusiva da tela; migration exercitada em PostgreSQL 17 temporário e aplicada ao projeto configurado. A inspeção SQL remota confirmou o tipo `timestamptz` e o uso de `lease_now`. `npm run test:supabase` parou na preflight por falta de `LARP_TEST_SUPABASE_URL`; nenhum teste remoto de integração nem escrita de dados de teste ocorreu. O retry real no app autenticado continua pendente |
+| Supabase RLS, convites, leases e corrida | As migrações, incluindo `larp_user_profiles`, foram aplicadas no Supabase local; os 14 testes pgTAP de perfil passaram. O ensaio `npm run test:supabase` parou no primeiro login porque a Auth anônima local está desabilitada; nenhum grupo nem dado de teste foi criado. Não há credenciais de staging. O projeto remoto configurado no app não tem a tabela de perfis (erro observado no schema cache); a migration remota não foi aplicada porque não há OAuth Supabase autenticado nesta sessão. Nenhum dado de teste foi gravado remotamente |
 | Captura local de mídia | App empacotado 0.2.1 abriu com perfil temporário sem cloud; captura real de microfone e tela 1920×1080 passou pelos handlers Electron e foi encerrada. Fluxo de negação/reautorização e UI dependente de grupo não testados |
 | Rede, WebRTC e TURN | Não validados: sem projeto staging e sem segundo PC. Um peer `disconnected` é descartado após 12 s; ICE `failed` tenta restart e expira após 20 s. Sem prova relay |
 | Carga de seis participantes | Pendente: exige seis PCs; RTT e perda não aparecem nas métricas da interface |
 | Workflow de release | Configurado para build em tags e publicação manual; matcher local aprovado. `workflow_dispatch` não executado: `gh` ausente e sem `GH_TOKEN`/`GITHUB_TOKEN`; nenhuma Release nova criada |
 
-Configuração Supabase/credenciais TURN não estão incluídas no checkout. A única mutação remota desta validação foi a migration `20261026230136_fix_screen_share_lease_timestamp.sql`, aplicada para corrigir a função de lease; nenhum dado de teste foi gravado. Builds e capturas locais não validam comunicação entre PCs, seleção de relay, reconexão ou capacidade máxima.
+Configuração Supabase/credenciais TURN não estão incluídas no checkout. A única mutação remota de uma validação anterior foi a migration `20261026230136_fix_screen_share_lease_timestamp.sql`; nesta alteração não houve migração nem escrita remota. O smoke test confirmou o zoom e o layout, mas o editor de perfil online não pôde ser exercitado sem aplicar `20261027004027_larp_user_profiles.sql` ao projeto remoto. Builds e capturas locais não validam comunicação entre PCs, seleção de relay, reconexão ou capacidade máxima.

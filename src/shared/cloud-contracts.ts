@@ -20,11 +20,25 @@ export interface GroupSummary {
   role: 'owner' | 'member';
 }
 
+export const USER_PROFILE_NAME_MAX_LENGTH = 32;
+export const USER_PROFILE_AVATAR_MAX_BYTES = 48 * 1024;
+export const USER_PROFILE_AVATAR_MAX_DATA_URI_LENGTH = 66_000;
+export const USER_PROFILE_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
+
+export interface UserProfile {
+  userId: string;
+  displayName: string | null;
+  avatarData: string | null;
+}
+
+export type UserProfileUpdate = Pick<UserProfile, 'displayName' | 'avatarData'>;
+
 export interface GroupMember {
   userId: string;
   publicKey: string;
   joinedAt: string;
   role: 'owner' | 'member';
+  profile: UserProfile | null;
 }
 
 export interface GroupInvite {

@@ -14,7 +14,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/database.test.ts tests/protocol.test.ts tests/quality.test.ts",
+    "test": "tsx --test tests/database.test.ts tests/profile-validation.test.ts tests/protocol.test.ts tests/quality.test.ts",
     "test:supabase": "tsx tests/supabase.integration.ts"
   },
   "dependencies": {
