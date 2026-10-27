@@ -1,5 +1,5 @@
 import squirrelStartup from 'electron-squirrel-startup';
-import { app, BrowserWindow, desktopCapturer, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, session } from 'electron';
 import { constants } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,8 +17,24 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 let mainWindow: BrowserWindow | null = null;
 let database: LocalLarpDatabase | null = null;
 let isAppStarting = true;
+let startupFailureReported = false;
 const appUserModelId = 'com.squirrel.Larp.Larp';
 app.setAppUserModelId(appUserModelId);
+
+if (!app.isPackaged) {
+  app.setPath('userData', join(app.getPath('appData'), 'Larp-dev'));
+}
+
+function reportStartupFailure(error: unknown): void {
+  if (startupFailureReported) return;
+  startupFailureReported = true;
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error('Não foi possível iniciar o Larp:', error);
+  closeStartupUpdater();
+  dialog.showErrorBox('Não foi possível iniciar o Larp', detail);
+  app.quit();
+}
+
 
 async function installPackagedCloudConfig(userDataPath: string): Promise<void> {
   if (!app.isPackaged) return;
@@ -81,11 +97,10 @@ function createWindow(): void {
   });
 
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    void window.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
-  }
+  const load = MAIN_WINDOW_VITE_DEV_SERVER_URL
+    ? window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+    : window.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+  void load.catch(reportStartupFailure);
 
   window.on('closed', () => {
     clearDesktopDisplayCapture(webContentsId);
@@ -144,7 +159,7 @@ if (!squirrelStartup) app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
+}).catch(reportStartupFailure);
 
 app.on('before-quit', () => {
   database?.close();

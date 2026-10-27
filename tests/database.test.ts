@@ -272,3 +272,39 @@ test('migração v4 para v5 preserva dados existentes e armazena perfis no cache
     rmSync(directory, { recursive: true, force: true });
   }
 });
+test('migração v4 reconhece colunas v5 preservadas e mantém perfis em cache', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'larp-v4-additive-'));
+  const databasePath = join(directory, 'larp.sqlite');
+  let database = createLarpDatabase(databasePath);
+  let databaseOpen = true;
+  const { group, members } = createCloudCacheFixture();
+
+  try {
+    database.replaceCloudCache([group], new Map([[group.id, members]]));
+    database.close();
+    databaseOpen = false;
+
+    const legacy = new Database(databasePath);
+    try {
+      legacy.pragma('user_version = 4');
+    } finally {
+      legacy.close();
+    }
+
+    database = createLarpDatabase(databasePath);
+    databaseOpen = true;
+    assert.deepEqual(database.getCachedCloudMembers(group.id), members);
+    database.close();
+    databaseOpen = false;
+
+    const migrated = new Database(databasePath, { readonly: true });
+    try {
+      assert.equal(migrated.pragma('user_version', { simple: true }), 5);
+    } finally {
+      migrated.close();
+    }
+  } finally {
+    if (databaseOpen) database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

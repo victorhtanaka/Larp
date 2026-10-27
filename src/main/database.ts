@@ -69,6 +69,13 @@ function migrate(database: Database.Database): void {
   }
   if (currentVersion === 5) return;
 
+  const memberColumns = currentVersion >= 3
+    ? new Set(
+      (database.pragma('table_info(cached_cloud_members)') as Array<{ name: string }>)
+        .map((column) => column.name),
+    )
+    : new Set<string>();
+
   database.transaction(() => {
     if (currentVersion <= 1) {
       database.exec(PEER_MESSAGE_SCHEMA);
@@ -79,17 +86,22 @@ function migrate(database: Database.Database): void {
     if (currentVersion < 4) {
       database.exec('DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS participants; DROP TABLE IF EXISTS groups;');
     }
-    database.exec(`
-      ALTER TABLE cached_cloud_members
-        ADD COLUMN display_name TEXT
-          CHECK (display_name IS NULL OR (display_name = trim(display_name) AND length(display_name) BETWEEN 1 AND 32));
-      ALTER TABLE cached_cloud_members
-        ADD COLUMN avatar_data TEXT
-          CHECK (avatar_data IS NULL OR (length(avatar_data) BETWEEN 27 AND 66000 AND substr(avatar_data, 1, 23) = 'data:image/webp;base64,'));
-    `);
+    if (!memberColumns.has('display_name')) {
+      database.exec(`
+        ALTER TABLE cached_cloud_members
+          ADD COLUMN display_name TEXT
+            CHECK (display_name IS NULL OR (display_name = trim(display_name) AND length(display_name) BETWEEN 1 AND 32));
+      `);
+    }
+    if (!memberColumns.has('avatar_data')) {
+      database.exec(`
+        ALTER TABLE cached_cloud_members
+          ADD COLUMN avatar_data TEXT
+            CHECK (avatar_data IS NULL OR (length(avatar_data) BETWEEN 27 AND 66000 AND substr(avatar_data, 1, 23) = 'data:image/webp;base64,'));
+      `);
+    }
     database.pragma('user_version = 5');
   })();
-
 }
 
 export function createLarpDatabase(databasePath: string): LocalLarpDatabase {

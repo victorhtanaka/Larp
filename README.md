@@ -44,10 +44,10 @@ Apagar ou perder a chave de identidade impede a recuperação da conta/grupos po
    - `supabase/migrations/0003_screen_share_leases.sql`
    - `supabase/migrations/0004_membership_realtime.sql`
    - `supabase/migrations/20261026230136_fix_screen_share_lease_timestamp.sql`
-   - `supabase/migrations/20261027004027_larp_user_profiles.sql`
+   - `supabase/migrations/20261027014514_larp_user_profiles.sql`
    A migration de perfis precisa estar aplicada antes de iniciar/atualizar o app contra esse projeto; a versão do cliente que usa perfis depende da tabela na listagem de membros.
 4. O instalador Windows inclui `default-cloud-config.json` com a URL e a chave pública do projeto. Na primeira execução, ele copia esse arquivo para `app.getPath('userData')/config.json` somente se ainda não houver configuração; configurações existentes são preservadas.
-   Para executar o projeto a partir do código-fonte, crie `config.json` em `app.getPath('userData')`:
+   Para executar o projeto a partir do código-fonte, o Electron usa um perfil isolado `Larp-dev` em `app.getPath('appData')/Larp-dev`, evitando que migrações de desenvolvimento alterem o banco da instalação publicada. Crie `config.json` em `app.getPath('userData')`:
 
    ```json
    {
