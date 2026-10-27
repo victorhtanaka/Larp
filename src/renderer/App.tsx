@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChatMessage, SelectedDisplaySource, TurnCredentialServer } from '../shared/contracts';
 import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupSummary, PublicIdentity, UserProfile } from '../shared/cloud-contracts';
 import { USER_PROFILE_AVATAR_MAX_BYTES, USER_PROFILE_NAME_MAX_LENGTH, USER_PROFILE_SOURCE_MAX_BYTES } from '../shared/cloud-contracts';
@@ -46,6 +46,30 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       {shapes[name]}
     </svg>
   );
+}
+
+const DEFAULT_ACCENT_COLOR = '#78a9ff';
+const ACCENT_COLOR_STORAGE_KEY = 'larp-accent-color';
+
+
+function loadAccentColor(): string {
+  try {
+    const saved = window.localStorage.getItem(ACCENT_COLOR_STORAGE_KEY);
+    return saved && /^#[\da-f]{6}$/i.test(saved) ? saved.toLowerCase() : DEFAULT_ACCENT_COLOR;
+  } catch {
+    return DEFAULT_ACCENT_COLOR;
+  }
+}
+
+function getAccentForeground(color: string): string {
+  const linearize = (index: number) => {
+    const channel = Number.parseInt(color.slice(index, index + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linearize(1) + 0.7152 * linearize(3) + 0.0722 * linearize(5);
+  const darkContrast = (luminance + 0.05) / 0.053;
+  const lightContrast = 1.05 / (luminance + 0.05);
+  return darkContrast >= lightContrast ? '#0a0a0a' : '#ffffff';
 }
 
 function formatTime(value: string): string {
@@ -203,10 +227,15 @@ function App() {
 
   const [sending, setSending] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen' | 'profile'>('connection');
+  const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen' | 'profile' | 'appearance'>('connection');
   const [screenViewerExpanded, setScreenViewerExpanded] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [accentColor, setAccentColor] = useState(loadAccentColor);
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty('--accent', accentColor);
+    document.documentElement.style.setProperty('--accent-foreground', getAccentForeground(accentColor));
+  }, [accentColor]);
   const helpCloseRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement | null>(null);
   const screenViewerToggleRef = useRef<HTMLButtonElement>(null);
@@ -298,6 +327,30 @@ function App() {
     setDialogMode('screen');
     setHelpOpen(true);
     void media.refreshDisplaySources();
+  };
+
+  const chooseAccentColor = (value: string) => {
+    if (!/^#[\da-f]{6}$/i.test(value)) return;
+    const normalized = value.toLowerCase();
+    setAccentColor(normalized);
+    try {
+      window.localStorage.setItem(ACCENT_COLOR_STORAGE_KEY, normalized);
+    } catch {
+      // The UI still uses the selected color if local storage is unavailable.
+    }
+  };
+  const restoreDefaultAccentColor = () => {
+    setAccentColor(DEFAULT_ACCENT_COLOR);
+    try {
+      window.localStorage.removeItem(ACCENT_COLOR_STORAGE_KEY);
+    } catch {
+      // The UI still uses the default color if local storage is unavailable.
+    }
+  };
+  const openAppearanceSettings = (event: MouseEvent<HTMLButtonElement>) => {
+    helpTriggerRef.current = event.currentTarget;
+    setDialogMode('appearance');
+    setHelpOpen(true);
   };
 
   const changeScreenViewerMode = useCallback((expanded: boolean) => {
@@ -968,6 +1021,9 @@ function App() {
             ) : cachedCloudGroup ? (
               <span className="header-local-badge">Histórico · somente leitura</span>
             ) : null}
+            <button className="icon-button help-trigger appearance-trigger" type="button" aria-label="Personalizar cor da interface" title="Personalizar cor da interface" onClick={openAppearanceSettings}>
+              <Icon name="spark" size={18} />
+            </button>
             <button className="icon-button help-trigger" type="button" aria-label="Ver estado da conexão" onClick={openHelp}>
               <Icon name="info" size={18} />
             </button>
@@ -1185,7 +1241,7 @@ function App() {
 
       {helpOpen && (
         <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeHelp(); }}>
-          <section className={`connection-dialog ${dialogMode === 'groups' ? 'group-manager-dialog' : dialogMode === 'audio' ? 'audio-settings-dialog' : dialogMode === 'screen' ? 'screen-settings-dialog' : dialogMode === 'profile' ? 'profile-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title" aria-describedby="connection-dialog-description">
+          <section className={`connection-dialog ${dialogMode === 'groups' ? 'group-manager-dialog' : dialogMode === 'audio' ? 'audio-settings-dialog' : dialogMode === 'screen' ? 'screen-settings-dialog' : dialogMode === 'profile' ? 'profile-dialog' : dialogMode === 'appearance' ? 'appearance-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title" aria-describedby="connection-dialog-description">
             <button ref={helpCloseRef} className="icon-button dialog-close" type="button" aria-label="Fechar diálogo" onClick={closeHelp}><Icon name="close" size={18} /></button>
             {dialogMode === 'connection' ? (
               <>
@@ -1268,6 +1324,20 @@ function App() {
                   <button className="dialog-done" type="button" onClick={closeHelp}>Fechar</button>
                 </div>
               </>
+            ) : dialogMode === 'appearance' ? (
+              <div className="appearance-form">
+                <h2 id="connection-dialog-title">Personalizar aparência</h2>
+                <p id="connection-dialog-description">Escolha a cor de destaque da interface. A preferência fica salva somente neste computador.</p>
+                <label htmlFor="accent-color">Cor de destaque</label>
+                <div className="appearance-color-row">
+                  <input id="accent-color" type="color" value={accentColor} onChange={(event) => chooseAccentColor(event.currentTarget.value)} />
+                  <output htmlFor="accent-color">{accentColor.toUpperCase()}</output>
+                </div>
+                <div className="dialog-actions">
+                  <button className="dialog-secondary" type="button" disabled={accentColor === DEFAULT_ACCENT_COLOR} onClick={restoreDefaultAccentColor}>Restaurar padrão</button>
+                  <button className="dialog-done" type="button" onClick={closeHelp}>Fechar</button>
+                </div>
+              </div>
             ) : dialogMode === 'profile' ? (
               <form className="profile-form" onSubmit={(event) => void saveProfile(event)}>
                 <h2 id="connection-dialog-title">Editar perfil</h2>

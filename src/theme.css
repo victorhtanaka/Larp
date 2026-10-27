@@ -17,7 +17,6 @@
 
 :root {
   --steam: #dddcde;
-  --valentine-heart: #be779e;
   --iron: #5e5e5e;
   --dark-charcoal: #323232;
   --eerie-black: #1b1b1b;
@@ -32,16 +31,17 @@
   --text: var(--steam);
   --muted: var(--steam);
   --subtle: var(--steam);
-  --accent: var(--valentine-heart);
-  --danger: var(--valentine-heart);
-  --alert: var(--valentine-heart);
+  --accent: #78a9ff;
+  --accent-foreground: var(--existential-angst);
+  --danger: #e05252;
+  --alert: #e2b766;
   --font-interface: 'Dongle', 'Segoe UI', sans-serif;
-  --type-body: 16px;
-  --type-control: 14px;
-  --type-support: 13px;
-  --type-meta: 12px;
-  --type-section: 18px;
-  --type-title: 22px;
+  --type-body: 18px;
+  --type-control: 16px;
+  --type-support: 15px;
+  --type-meta: 14px;
+  --type-section: 20px;
+  --type-title: 24px;
   --leading-body: 1.3;
   --leading-message: 1.4;
   --leading-title: 1.1;
