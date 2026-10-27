@@ -1,9 +1,10 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { profileUpdateFromIpc } from './profile-validation';
 import type { GroupMember, IdentitySignature } from '../shared/cloud-contracts';
 import { envelopeSigningBytes, parseProtocolEnvelope, validateProtocolEnvelope, MAX_SYNC_RANGE, MAX_SYNC_BATCH_MESSAGES, type SignedChatEnvelope, type SignedAckEnvelope } from '../shared/webrtc-protocol';
 import type { LocalLarpDatabase } from './database';
 import type { LarpRuntime } from './services/runtime';
-import { profileUpdateFromIpc } from './profile-validation';
+import { requireGroupPresenceStatus } from './services/supabase-groups';
 import { listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVITE_CODE = /^[A-Za-z0-9_-]{43}$/;
@@ -269,6 +270,55 @@ export function registerIpcHandlers(
     const groupId = requireUuid(groupValue, 'Grupo');
     membershipSubscriptions.get(event.sender.id)?.get(groupId)?.dispose();
   });
+  ipcMain.handle('cloud:subscribe-presence', async (event, groupValue: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    const groupId = requireUuid(groupValue, 'Grupo');
+    const sender = event.sender;
+    presenceSubscriptions.get(sender.id)?.get(groupId)?.dispose();
+    const disposeCloud = await runtime.requireCloud().subscribeRealtimePresence(
+      groupId,
+      (presence, ready) => {
+        if (!sender.isDestroyed() && BrowserWindow.fromWebContents(sender) === getMainWindow()) {
+          sender.send('cloud:presence-update', { groupId, presence, ready });
+        }
+      },
+      (message) => {
+        if (!sender.isDestroyed() && BrowserWindow.fromWebContents(sender) === getMainWindow()) {
+          sender.send('cloud:presence-error', { groupId, message });
+        }
+      },
+    );
+    const dispose = () => {
+      void disposeCloud();
+      sender.removeListener('destroyed', dispose);
+      const subscriptions = presenceSubscriptions.get(sender.id);
+      if (subscriptions?.get(groupId)?.dispose === dispose) {
+        subscriptions.delete(groupId);
+        if (subscriptions.size === 0) presenceSubscriptions.delete(sender.id);
+      }
+    };
+    const subscriptions = presenceSubscriptions.get(sender.id) ?? new Map<string, { dispose: () => void }>();
+    subscriptions.set(groupId, { dispose });
+    presenceSubscriptions.set(sender.id, subscriptions);
+    sender.once('destroyed', dispose);
+    return true;
+  });
+  ipcMain.handle('cloud:unsubscribe-presence', (event, groupValue: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    const groupId = requireUuid(groupValue, 'Grupo');
+    presenceSubscriptions.get(event.sender.id)?.get(groupId)?.dispose();
+  });
+  ipcMain.handle('cloud:set-presence', async (event, input: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || !('groupId' in input) || !('status' in input)) {
+      throw new TypeError('Dados de presença inválidos.');
+    }
+    await runtime.requireCloud().setRealtimePresence(
+      requireUuid(input.groupId, 'Grupo'),
+      requireGroupPresenceStatus(input.status),
+    );
+  });
   ipcMain.handle('cloud:get-cache', (event) => {
     assertTrustedFrame(event, getMainWindow());
     return database.getCachedCloudGroups();
@@ -281,6 +331,7 @@ export function registerIpcHandlers(
   const messageStores = new Map<string, ReturnType<LocalLarpDatabase['createMessageStore']>>();
   const signalSubscriptions = new Map<number, { groupId: string; dispose: () => void }>();
   const membershipSubscriptions = new Map<number, Map<string, { dispose: () => void }>>();
+  const presenceSubscriptions = new Map<number, Map<string, { dispose: () => void }>>();
   const getStore = (userId: string) => {
     let store = messageStores.get(userId);
     if (!store) {

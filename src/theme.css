@@ -35,6 +35,9 @@
   --accent-foreground: var(--existential-angst);
   --danger: #e05252;
   --alert: #e2b766;
+  --presence-online: #36c875;
+  --presence-away: #ee9c43;
+  --presence-offline: #858585;
   --font-interface: 'Dongle', 'Segoe UI', sans-serif;
   --type-body: 18px;
   --type-control: 16px;

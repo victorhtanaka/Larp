@@ -33,6 +33,8 @@ export interface UserProfile {
 
 export type UserProfileUpdate = Pick<UserProfile, 'displayName' | 'avatarData'>;
 
+
+export type GroupPresenceStatus = 'online' | 'away';
 export interface GroupMember {
   userId: string;
   publicKey: string;

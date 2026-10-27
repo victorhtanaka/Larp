@@ -45,18 +45,28 @@ export interface CaptureResult {
   error?: string;
 }
 
-const microphoneConstraints = (deviceId?: string): MediaStreamConstraints => ({
+const microphoneConstraints = (deviceId?: string, noiseSuppression = true): MediaStreamConstraints => ({
   audio: {
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     channelCount: { ideal: 1 },
     echoCancellation: true,
-    noiseSuppression: true,
+    noiseSuppression,
     autoGainControl: true,
     sampleRate: { ideal: 48000 },
     sampleSize: { ideal: 16 },
   },
   video: false,
 });
+
+export function supportsNoiseSuppression(mediaDevices?: MediaDevices): boolean {
+  try {
+    const devices = mediaDevices ?? (typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined);
+    return devices?.getSupportedConstraints().noiseSuppression === true;
+  } catch {
+    return false;
+  }
+}
+
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : '';
@@ -142,10 +152,10 @@ export class MediaSession {
     }
   }
 
-  async requestMicrophonePermission(): Promise<CaptureResult> {
+  async requestMicrophonePermission(noiseSuppression = true): Promise<CaptureResult> {
     if (this.closed || !this.mediaDevices || typeof this.mediaDevices.getUserMedia !== 'function') return { state: 'unsupported' };
     try {
-      const temporaryStream = await this.mediaDevices.getUserMedia(microphoneConstraints());
+      const temporaryStream = await this.mediaDevices.getUserMedia(microphoneConstraints(undefined, noiseSuppression));
       temporaryStream.getTracks().forEach((track) => track.stop());
       return { state: 'active' };
     } catch (error) {
@@ -154,12 +164,12 @@ export class MediaSession {
     }
   }
 
-  async selectMicrophone(deviceId: string): Promise<CaptureResult> {
+  async selectMicrophone(deviceId: string, noiseSuppression = true): Promise<CaptureResult> {
     if (!deviceId) return { state: 'device-unavailable', error: 'Select a microphone explicitly.' };
     if (this.closed || !this.mediaDevices || typeof this.mediaDevices.getUserMedia !== 'function') return { state: 'unsupported' };
     await this.stopMicrophone();
     try {
-      const stream = await this.mediaDevices.getUserMedia(microphoneConstraints(deviceId));
+      const stream = await this.mediaDevices.getUserMedia(microphoneConstraints(deviceId, noiseSuppression));
       this.selectedMicrophoneId = deviceId;
       this.microphone = stream;
       this.ownStream(stream);
@@ -298,6 +308,7 @@ export class MediaSession {
       const context = this.toneContext ?? this.audioContextFactory();
       const sinkContext = context as AudioContext & { setSinkId?: (sinkId: string) => Promise<void> };
       if (this.selectedOutputId && typeof sinkContext.setSinkId === 'function') await sinkContext.setSinkId(this.selectedOutputId);
+      if (context.state === 'suspended') await context.resume();
       this.toneContext = context;
       const oscillator = context.createOscillator();
       const gain = context.createGain();

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChatMessage, SelectedDisplaySource, TurnCredentialServer } from '../shared/contracts';
-import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupSummary, PublicIdentity, UserProfile } from '../shared/cloud-contracts';
+import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupPresenceStatus, GroupSummary, PublicIdentity, UserProfile } from '../shared/cloud-contracts';
 import { USER_PROFILE_AVATAR_MAX_BYTES, USER_PROFILE_NAME_MAX_LENGTH, USER_PROFILE_SOURCE_MAX_BYTES } from '../shared/cloud-contracts';
 import type { SignedChatEnvelope } from '../shared/webrtc-protocol';
 import { createGroupPeerMesh } from './rtc/create-peer-mesh';
 import type { PeerMesh, PeerConnectionStatus } from './rtc/peer-mesh';
 import { useMediaController } from './media/use-media-controller';
 import { connectionPresentation } from './presentation';
+import { notificationsReducer, type AppNotification } from './notifications';
+import { resolveLocalPresenceStatus, resolveMemberPresence, type MemberPresenceStatus } from './presence';
 import larpWordmarkUrl from '../assets/larp-wordmark.png';
 
 const INITIAL_CLOUD_STATUS: CloudConnectionStatus = {
@@ -19,11 +21,12 @@ function describeError(_error: unknown, fallback: string): string {
   return fallback;
 }
 
-type IconName = 'bubble' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark';
+type IconName = 'bubble' | 'bell' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const shapes: Record<IconName, ReactNode> = {
     bubble: <><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 2 1-4.5A7.5 7.5 0 1 1 20 11.5Z" /><path d="M7 11h.01M12 11h.01M17 11h.01" /></>,
+    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></>,
     grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
     plus: <><path d="M12 5v14M5 12h14" /></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
@@ -81,14 +84,72 @@ function profileInitials(name: string | null | undefined, fallback: string): str
   return characters.length ? characters.slice(0, 2).join('').toLocaleUpperCase('pt-BR') : fallback;
 }
 
-function ProfileAvatar({ profile, initials, className }: {
+type AvatarPresence = MemberPresenceStatus;
+function ProfileAvatar({ profile, initials, className, presence }: {
   profile?: UserProfile | null;
   initials: string;
   className: string;
+  presence?: AvatarPresence;
 }) {
-  return (
+  const avatar = (
     <div className={className} aria-hidden="true">
       {profile?.avatarData ? <img src={profile.avatarData} alt="" draggable={false} /> : initials}
+    </div>
+  );
+  if (!presence) return avatar;
+  const presenceLabel = presence === 'online' ? 'Online' : presence === 'away' ? 'Ausente' : 'Offline';
+  return (
+    <span className={`presence-avatar presence-avatar-${presence}`} role="img" aria-label={presenceLabel} title={presenceLabel}>
+      {avatar}
+      <span className={`presence-indicator presence-indicator-${presence}`} aria-hidden="true" />
+    </span>
+  );
+}
+
+function NotificationCenter({ notifications, onOpen, onClear }: {
+  notifications: readonly AppNotification[];
+  onOpen: (notification: AppNotification) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="notification-center">
+      <header className="notification-center-header">
+        <div>
+          <h2>Notificações</h2>
+          <p>Mensagens recebidas e entradas em chamadas.</p>
+        </div>
+        {notifications.length > 0 && (
+          <button className="notification-clear" type="button" onClick={onClear}>Limpar tudo</button>
+        )}
+      </header>
+      {notifications.length === 0 ? (
+        <div className="notification-empty">
+          <Icon name="bell" size={22} />
+          <p>As novidades dos seus grupos aparecerão aqui.</p>
+        </div>
+      ) : (
+        <ol className="notification-list">
+          {notifications.map((notification) => (
+            <li key={notification.id}>
+              <button
+                className={`notification-item${notification.read ? '' : ' notification-item-unread'}`}
+                type="button"
+                onClick={() => onOpen(notification)}
+              >
+                <span className={`notification-kind-icon notification-kind-${notification.kind}`}>
+                  <Icon name={notification.kind === 'message' ? 'bubble' : 'mic'} size={17} />
+                </span>
+                <span className="notification-item-copy">
+                  <strong>{notification.kind === 'message' ? 'Nova mensagem' : 'Entrou na chamada'}</strong>
+                  <span>{notification.actorName} · {notification.groupName}</span>
+                  <time dateTime={notification.createdAt}>{formatTime(notification.createdAt)}</time>
+                </span>
+                {!notification.read && <span className="notification-unread-dot" aria-label="Não lida" />}
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
@@ -196,6 +257,9 @@ function App() {
   const [cloudGroupId, setCloudGroupId] = useState<string>();
   const [cloudMembers, setCloudMembers] = useState<GroupMember[]>([]);
   const [memberGroupId, setMemberGroupId] = useState<string>();
+  const [presenceByUserId, setPresenceByUserId] = useState<Record<string, GroupPresenceStatus>>({});
+  const [presenceReady, setPresenceReady] = useState(false);
+  const [localPresenceStatus, setLocalPresenceStatus] = useState<AvatarPresence>('offline');
   const [cloudMessages, setCloudMessages] = useState<ChatMessage[]>([]);
   const [cloudMessagesGroupId, setCloudMessagesGroupId] = useState<string>();
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -206,6 +270,7 @@ function App() {
   const [peerError, setPeerError] = useState('');
   const meshRef = useRef<PeerMesh | null>(null);
   const persistedCloudMessageIds = useRef(new Set<string>());
+  const profilesByUserIdRef = useRef(new Map<string, UserProfile>());
   const [memberLoading, setMemberLoading] = useState(false);
   const [identity, setIdentity] = useState<PublicIdentity | null>(null);
   const [myProfile, setMyProfile] = useState<UserProfile | null>();
@@ -232,6 +297,16 @@ function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [accentColor, setAccentColor] = useState(loadAccentColor);
+  const [notifications, dispatchNotifications] = useReducer(notificationsReducer, []);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const notificationsOpenRef = useRef(false);
+  const previousRemoteAudioPeerIdsRef = useRef<{ groupId?: string; peerIds: Set<string> }>({ peerIds: new Set() });
+  const addNotification = useCallback((notification: Omit<AppNotification, 'createdAt' | 'read'>) => {
+    dispatchNotifications({
+      type: 'add',
+      notification: { ...notification, createdAt: new Date().toISOString(), read: notificationsOpenRef.current },
+    });
+  }, []);
   useLayoutEffect(() => {
     document.documentElement.style.setProperty('--accent', accentColor);
     document.documentElement.style.setProperty('--accent-foreground', getAccentForeground(accentColor));
@@ -481,6 +556,87 @@ function App() {
       unsubscribe();
     };
   }, [activeCloudGroup?.id, localCloudUserId]);
+  useEffect(() => {
+    const groupId = activeCloudGroup?.id;
+    if (!groupId || !localCloudUserId || memberGroupId !== groupId || memberLoading) {
+      setPresenceByUserId({});
+      setPresenceReady(false);
+      setLocalPresenceStatus('offline');
+      return;
+    }
+
+    let active = true;
+    let channelReady = false;
+    let currentStatus: GroupPresenceStatus = 'online';
+    let lastActivity = Date.now();
+    setPresenceByUserId({});
+    setPresenceReady(false);
+    setLocalPresenceStatus('online');
+
+    const publish = (status: GroupPresenceStatus) => {
+      if (!active || currentStatus === status) return;
+      currentStatus = status;
+      setLocalPresenceStatus(status);
+      if (channelReady) {
+        void window.larp.setCloudPresence(groupId, status).catch(() => {
+          if (active) {
+            channelReady = false;
+            setPresenceReady(false);
+          }
+        });
+      }
+    };
+    const onActivity = () => {
+      lastActivity = Date.now();
+      if (document.visibilityState === 'visible' && document.hasFocus()) publish('online');
+    };
+    const refreshPresence = () => publish(resolveLocalPresenceStatus(
+      document.visibilityState === 'visible',
+      document.hasFocus(),
+      lastActivity,
+      Date.now(),
+    ));
+    const unsubscribe = window.larp.subscribeCloudPresence(
+      groupId,
+      (presence, ready) => {
+        if (!active) return;
+        setPresenceByUserId(presence);
+        setPresenceReady(ready);
+        if (ready && !channelReady && currentStatus !== 'online') {
+          void window.larp.setCloudPresence(groupId, currentStatus).catch(() => {
+            if (active) {
+              channelReady = false;
+              setPresenceReady(false);
+            }
+          });
+        }
+        channelReady = ready;
+      },
+      () => {
+        if (active) {
+          channelReady = false;
+          setPresenceReady(false);
+        }
+      },
+    );
+    const activityEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+    for (const event of activityEvents) document.addEventListener(event, onActivity, { passive: true });
+    window.addEventListener('focus', onActivity);
+    window.addEventListener('blur', refreshPresence);
+    document.addEventListener('visibilitychange', refreshPresence);
+    const timer = window.setInterval(refreshPresence, 15_000);
+    refreshPresence();
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      for (const event of activityEvents) document.removeEventListener(event, onActivity);
+      window.removeEventListener('focus', onActivity);
+      window.removeEventListener('blur', refreshPresence);
+      document.removeEventListener('visibilitychange', refreshPresence);
+      unsubscribe();
+    };
+  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading]);
 
   useEffect(() => {
     if (!cachedCloudGroup) {
@@ -529,7 +685,7 @@ function App() {
     [peerStates],
   );
   const activeMesh = meshReady ? meshRef.current : null;
-  const media = useMediaController({ groupId: activeCloudGroup?.id, mesh: activeMesh, connectedPeerIds });
+  const media = useMediaController({ groupId: activeCloudGroup?.id, mesh: activeMesh, connectedPeerIds, localParticipantId: localCloudUserId });
   useEffect(() => {
     if (media.displayStream || media.remoteVideoStream || !screenViewerExpanded) return;
     changeScreenViewerMode(false);
@@ -606,6 +762,17 @@ function App() {
           onMessage: (message) => {
             if (!current) return;
             persistedCloudMessageIds.current.add(message.messageId);
+            if (message.senderId !== localCloudUserId) {
+              const actorName = profilesByUserIdRef.current.get(message.senderId)?.displayName?.trim()
+                || `Participante · ${message.senderId.slice(-6).toUpperCase()}`;
+              addNotification({
+                id: `message:${message.messageId}`,
+                kind: 'message',
+                groupId: group.id,
+                groupName: group.name,
+                actorName,
+              });
+            }
             const displayMessage = toPeerChatMessage(message, localCloudUserId);
             setCloudMessages((previous) => previous.some((item) => item.id === displayMessage.id)
               ? previous
@@ -920,10 +1087,66 @@ function App() {
   const profilesByUserId = new Map(
     visibleMembers.flatMap((member) => member.profile ? [[member.userId, member.profile] as const] : []),
   );
+  profilesByUserIdRef.current = profilesByUserId;
   const selfMember = visibleMembers.find((member) => member.userId === localParticipantId
     || member.publicKey === identity?.publicKey);
   const selfProfile = myProfile !== undefined ? myProfile : selfMember?.profile ?? null;
   const profileNameTooLong = Array.from(profileName.trim()).length > USER_PROFILE_NAME_MAX_LENGTH;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.read).length;
+  useEffect(() => {
+    const groupId = activeCloudGroup?.id;
+    const currentPeerIds = new Set(media.remoteAudioPeerIds);
+    const previous = previousRemoteAudioPeerIdsRef.current;
+    if (previous.groupId !== groupId) {
+      previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: currentPeerIds };
+      return;
+    }
+    if (!groupId || !activeCloudGroup) {
+      previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: currentPeerIds };
+      return;
+    }
+    for (const peerId of currentPeerIds) {
+      if (previous.peerIds.has(peerId)) continue;
+      const actorName = profilesByUserIdRef.current.get(peerId)?.displayName?.trim()
+        || `Participante · ${peerId.slice(-6).toUpperCase()}`;
+      addNotification({
+        id: `call-join:${groupId}:${peerId}:${Date.now()}`,
+        kind: 'call-join',
+        groupId,
+        groupName: activeCloudGroup.name,
+        actorName,
+      });
+      void media.playCallJoinSound();
+    }
+    previousRemoteAudioPeerIdsRef.current = { groupId, peerIds: currentPeerIds };
+  }, [activeCloudGroup?.id, activeCloudGroup?.name, addNotification, media.playCallJoinSound, media.remoteAudioPeerIds]);
+  const callParticipants = [
+    ...(media.callActive && localCloudUserId ? [{
+      id: localCloudUserId,
+      label: 'Você',
+      profile: profilesByUserId.get(localCloudUserId),
+      isLocal: true,
+      isSpeaking: media.speakingParticipantIds.includes(localCloudUserId),
+    }] : []),
+    ...media.remoteAudioPeerIds
+      .filter((peerId) => peerStates[peerId] === 'connected')
+      .map((peerId) => {
+        const profile = profilesByUserId.get(peerId);
+        return {
+          id: peerId,
+          label: profile?.displayName?.trim() || `Participante · ${peerId.slice(-6).toUpperCase()}`,
+          profile,
+          isLocal: false,
+          isSpeaking: media.speakingParticipantIds.includes(peerId),
+        };
+      }),
+  ];
+  const openNotification = (notification: AppNotification) => {
+    dispatchNotifications({ type: 'read', id: notification.id });
+    if (listedCloudGroups.some((group) => group.id === notification.groupId)) selectCloudGroup(notification.groupId);
+    notificationsOpenRef.current = false;
+    setNotificationsOpen(false);
+  };
 
   return (
     <main className={`app-shell${screenViewerExpanded ? ' app-shell-screen-expanded' : ''}`}>
@@ -1021,6 +1244,22 @@ function App() {
             ) : cachedCloudGroup ? (
               <span className="header-local-badge">Histórico · somente leitura</span>
             ) : null}
+            <button
+              className={`icon-button help-trigger notification-trigger${notificationsOpen ? ' notification-trigger-active' : ''}`}
+              type="button"
+              aria-label={notificationsOpen ? 'Voltar à conversa' : unreadNotificationCount ? `Abrir notificações, ${unreadNotificationCount} não lidas` : 'Abrir notificações'}
+              title={notificationsOpen ? 'Voltar à conversa' : 'Notificações'}
+              aria-pressed={notificationsOpen}
+              onClick={() => {
+                const open = !notificationsOpen;
+                notificationsOpenRef.current = open;
+                setNotificationsOpen(open);
+                if (open) dispatchNotifications({ type: 'read-all' });
+              }}
+            >
+              <Icon name="bell" size={18} />
+              {unreadNotificationCount > 0 && <span className="notification-badge" aria-hidden="true">{unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}</span>}
+            </button>
             <button className="icon-button help-trigger appearance-trigger" type="button" aria-label="Personalizar cor da interface" title="Personalizar cor da interface" onClick={openAppearanceSettings}>
               <Icon name="spark" size={18} />
             </button>
@@ -1042,7 +1281,15 @@ function App() {
         )}
 
 
-        <section className="message-list" aria-label={`Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live={screenViewerExpanded ? 'off' : 'polite'}>
+        <section className="message-list" aria-label={notificationsOpen ? 'Notificações' : `Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live={!notificationsOpen && !screenViewerExpanded ? 'polite' : 'off'}>
+          {notificationsOpen ? (
+            <NotificationCenter
+              notifications={notifications}
+              onOpen={openNotification}
+              onClear={() => dispatchNotifications({ type: 'clear' })}
+            />
+          ) : (
+            <>
           {(media.displayStream || media.remoteVideoStream) && (
             <div className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`}>
               <div className="screen-stage-header">
@@ -1104,12 +1351,41 @@ function App() {
             <div className="empty-state"><Icon name="info" size={22} /><p>{connectionCopy.description}</p><button className="inline-action" type="button" onClick={openHelp}>Ver conexão</button></div>
           )}
           {error && <p className="inline-error" role="alert">{error}</p>}
+            </>
+          )}
         </section>
 
 
         <div className="chat-bottom">
-          <div className="call-dock" aria-label="Controles de voz">
-            <div className="call-status"><span className={`call-status-dot ${media.callActive ? 'call-status-live' : ''}`} /><span>{media.callActive ? `Voz ativa · ${connectedPeerLabel}` : activeCloudGroup ? `${connectedPeerLabel} · voz desligada` : 'Conecte-se a um grupo para iniciar a chamada'}</span></div>
+          <div className={`call-dock${callParticipants.length ? ' call-dock-active' : ''}`} aria-label={`Controles de voz${callParticipants.length ? ` · ${callParticipants.length} na chamada` : ''}`}>
+            <div className="call-overview">
+              <div className="call-status">
+                <span className={`call-status-dot ${callParticipants.length ? 'call-status-live' : ''}`} />
+                <span>{callParticipants.length
+                  ? `Chamada ativa · ${callParticipants.length} ${callParticipants.length === 1 ? 'participante' : 'participantes'} na chamada`
+                  : activeCloudGroup ? `${connectedPeerLabel} · voz desligada` : 'Conecte-se a um grupo para iniciar a chamada'}</span>
+              </div>
+              {callParticipants.length > 0 && (
+                <div className="call-participants" aria-label="Participantes na chamada">
+                  <span className="call-participants-label">NA CHAMADA</span>
+                  {callParticipants.map((participant) => (
+                    <span
+                      className={`call-participant${participant.isSpeaking ? ' call-participant-speaking' : ''}`}
+                      key={participant.id}
+                      title={participant.isSpeaking ? `${participant.label} está falando` : participant.label}
+                      aria-label={participant.isSpeaking ? `${participant.label} está falando` : participant.label}
+                    >
+                      <ProfileAvatar
+                        className="call-participant-avatar"
+                        profile={participant.profile}
+                        initials={profileInitials(participant.profile?.displayName, participant.isLocal ? 'PC' : participant.id.slice(-2).toUpperCase())}
+                      />
+                      <span className="call-participant-name">{participant.label}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="call-actions">
               <button
@@ -1222,12 +1498,20 @@ function App() {
               const fallbackLabel = isSelf ? 'Este computador' : `Participante · ${member.userId.slice(-6).toUpperCase()}`;
               const label = member.profile?.displayName || fallbackLabel;
               const roleLabel = member.role === 'owner' ? 'Responsável' : 'Membro';
+              const presenceForMember = resolveMemberPresence(
+                member.userId,
+                localCloudUserId,
+                localPresenceStatus,
+                presenceByUserId,
+                Boolean(activeCloudGroup && presenceReady),
+              );
               return (
                 <li key={member.userId} className="member-row">
                   <ProfileAvatar
                     className={`avatar member-avatar ${isSelf ? 'avatar-local' : ''}`}
                     profile={member.profile}
                     initials={profileInitials(member.profile?.displayName, isSelf ? 'PC' : member.userId.slice(-2).toUpperCase())}
+                    presence={presenceForMember}
                   />
                   <span className="member-name"><strong>{label}</strong><span>{roleLabel}</span></span>
                   {activeCloudGroup?.role === 'owner' && !isSelf && (
@@ -1438,6 +1722,22 @@ function App() {
                   <div className="microphone-meter" role="meter" aria-label="Nível do microfone" aria-valuemin={0} aria-valuemax={100} aria-valuenow={media.microphoneLevel}>
                     <span style={{ transform: `scaleX(${media.microphoneLevel / 100})` }} />
                   </div>
+                  <label className="noise-suppression-option">
+                    <input
+                      type="checkbox"
+                      checked={media.noiseSuppressionEnabled}
+                      disabled={!media.noiseSuppressionSupported || media.audioBusy || media.callActive || media.microphoneTestActive}
+                      onChange={(event) => media.setNoiseSuppression(event.target.checked)}
+                    />
+                    <span>
+                      <strong>Supressão de ruído</strong>
+                      <small>{!media.noiseSuppressionSupported
+                        ? 'Não há suporte nativo no Chromium deste computador.'
+                        : media.callActive || media.microphoneTestActive
+                          ? 'Saia da chamada ou pare o teste para alterar. A opção vale na próxima captura.'
+                          : 'Reduz ruídos do ambiente; a intensidade é automática e definida pelo Chromium e pelo microfone.'}</small>
+                    </span>
+                  </label>
                   <label htmlFor="output-device">Saída de áudio</label>
                   <select id="output-device" value={media.selectedOutputId} disabled={media.audioBusy} onChange={(event) => void media.selectAudioOutput(event.target.value)}>
                     <option value="">Saída padrão</option>

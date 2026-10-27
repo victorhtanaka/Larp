@@ -179,7 +179,7 @@ The spatial language borrows Discord's scan order—real groups at left, one act
 
 ## Colors
 
-The interface uses exactly six colors: Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`), and Existential Angst (`#0a0a0a`). Semantic tokens map onto these primitives without adding shades.
+The base interface palette uses six colors: Steam (`#dddcde`), Valentine Heart (`#be779e`), Iron (`#5e5e5e`), Dark Charcoal (`#323232`), Eerie Black (`#1b1b1b`), and Existential Angst (`#0a0a0a`); standard semantic tokens map onto these primitives. Presence alone adds three dedicated non-text semantic colors: green for online, orange for away, and gray for offline.
 
 ### Semantic Mapping
 - **Existential Angst** (`bg`): application canvas and expanded viewer.
@@ -252,19 +252,19 @@ Profile photos are centered square crops encoded as 128 × 128 WebP thumbnails (
 ### Navigation
 - **Groups:** compact real-group rows at left; selected state uses Dark Charcoal with a Valentine Heart border. No separate server rail or public discovery model.
 - **Conversation:** one active group's header and signed-message history occupy the flexible center.
-- **Details:** real group metadata, authorized members, and actions stay in the right panel. Presence is never inferred from membership.
+- **Details:** real group metadata, authorized members, and actions stay in the right panel. Presence is group-scoped, sourced only from private Realtime state after a healthy sync, and never inferred from membership alone.
 
 ## Do's and Don'ts
 
 ### Do:
 - **Do** preserve the exact frontmatter palette roles when adding controls or states.
-- **Do** use the six named palette colors and their semantic tokens; do not add shades.
+- **Do** use the six named palette colors for surfaces and copy; presence uses only its three dedicated status tokens.
 - **Do** use Existential Angst text on Valentine Heart buttons and Steam text on dark surfaces.
-- **Do** use Valentine Heart for focus, borders, icons and non-text status indicators.
+- **Do** use Valentine Heart for focus, borders, and icons; presence indicators use their dedicated green, orange, and gray semantic tokens.
 - **Do** distinguish authorized membership from measured reachability; keep focus visible and respect reduced motion.
 
 ### Don't:
 - **Don't** use Steam text on Valentine Heart or Valentine Heart as normal text on Dark Charcoal.
 - **Don't** color a disabled action as if it were ready.
-- **Don't** add public-server discovery, channels, invented members, presence, or messages to Larp.
+- **Don't** add public-server discovery, invented members, or messages; presence remains private to active groups.
 - **Don't** use shadows to separate panels; use the existing tonal layers and 1px borders.

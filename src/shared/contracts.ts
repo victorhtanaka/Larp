@@ -1,4 +1,4 @@
-import type { CloudConnectionStatus, GroupInvite, GroupMember, GroupSummary, IdentitySignature, PublicIdentity, UserProfile } from './cloud-contracts';
+import type { CloudConnectionStatus, GroupInvite, GroupMember, GroupPresenceStatus, GroupSummary, IdentitySignature, PublicIdentity, UserProfile } from './cloud-contracts';
 import type { GroupInviteSummary, GroupLeaveResult, UserProfileUpdate } from './cloud-contracts';
 import type { SignedAckEnvelope, SignedChatEnvelope, SignedProtocolEnvelope } from './webrtc-protocol';
 
@@ -47,6 +47,12 @@ export interface LarpBridge {
     onMembers: (members: GroupMember[]) => void,
     onError: (message: string) => void,
   ): () => void;
+  subscribeCloudPresence(
+    groupId: string,
+    onPresence: (presence: Record<string, GroupPresenceStatus>, ready: boolean) => void,
+    onError: (message: string) => void,
+  ): () => void;
+  setCloudPresence(groupId: string, status: GroupPresenceStatus): Promise<void>;
   getTurnServers(groupId: string): Promise<readonly TurnCredentialServer[]>;
   getCachedCloudGroups(): Promise<GroupSummary[]>;
   getCachedCloudMembers(groupId: string): Promise<GroupMember[]>;

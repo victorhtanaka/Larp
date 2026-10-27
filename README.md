@@ -92,7 +92,9 @@ Quando a função não fornece credenciais TURN (por configuração, limite ou s
 - Sinalização privada autenticada por membro, envelopes versionados e assinados, negociação WebRTC com ofertas simultâneas, lotes ICE e reinício/reconexão.
 - Malha WebRTC para até cinco pares remotos por participante; canal de dados confiável e ordenado para chat e sincronização de histórico disponível.
 - Persistência SQLite antes do envio, assinaturas Ed25519, deduplicação, verificação de sequência, confirmações locais e sincronização de lacunas por lotes. Não existe armazenamento central das mensagens.
-- Microfone e saída selecionáveis, teste local, silenciar microfone/reprodução, Opus quando compatível, cancelamento de eco e redução de ruído; o envio de voz permite até 64 kb/s por participante, sujeito ao controle de congestionamento WebRTC, e o volume recebido é ajustável e salvo localmente neste PC.
+- Microfone e saída selecionáveis, teste local, silenciar microfone/reprodução, Opus quando compatível, cancelamento de eco e supressão nativa de ruído ativável/desativável com preferência salva neste PC e intensidade automática; o envio de voz permite até 64 kb/s por participante, sujeito ao controle de congestionamento WebRTC, e o volume recebido é ajustável e salvo localmente.
+- A central de notificações mostra mensagens novas e entradas em chamadas, com contador de não lidas, retorno ao grupo e até 100 eventos mantidos apenas na sessão atual. A chegada de áudio remoto mostra a pessoa no dock de voz e toca um aviso local.
+- Indicadores privados de presença nos avatares: verde online, laranja ausente e cinza offline, exibidos após sincronização do grupo; atividade de voz local destaca em verde o participante que está falando.
 - Escolha explícita de monitor/janela; áudio do sistema desativado por padrão; reserva única de compartilhamento com expiração e liberação ao parar.
 - Visualização da transmissão em tela cheia na janela, maximizando sem ocultar a barra de tarefas; `Esc` restaura o estado e o tamanho anteriores da janela.
 - Modos Movimento e Texto, codecs negociados (AV1/VP9/H.264/VP8 conforme suporte), orçamento total padrão de 20 Mb/s e teto de 8 Mb/s por conexão; métricas de resolução, FPS, codec, upload e caminho observado.
@@ -110,7 +112,7 @@ npm test
 npm run make
 ```
 
-Os testes locais cobrem persistência/migração SQLite (incluindo cache de perfil v4→v5), validação de nome/avatar e formato IPC, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens e limites de qualidade de vídeo. O teste SQL `supabase/tests/larp_user_profiles.test.sql` cobre RLS e visibilidade por associação; execute-o com `npx supabase start` e `npx supabase test db`. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
+Os testes locais cobrem persistência/migração SQLite (incluindo cache de perfil v4→v5), validação de nome/avatar e formato IPC, assinaturas e validação de protocolo, ordenação/deduplicação de mensagens, limites de qualidade de vídeo, transições da central de notificações, ciclos de faixas de áudio remotas e retomada do tom da chamada. O teste SQL `supabase/tests/larp_user_profiles.test.sql` cobre RLS e visibilidade por associação; execute-o com `npx supabase start` e `npx supabase test db`. `npm run make` gera `Setup.exe`, `.nupkg` e `RELEASES` do Squirrel em `out/make`. `npm run test:supabase` é um ensaio separado, somente para staging isolado.
 
 O teste Supabase exige `LARP_TEST_SUPABASE_URL`, `LARP_TEST_SUPABASE_ANON_KEY` e `LARP_TEST_SUPABASE_ISOLATED=true`; recusa a URL de distribuição antes de criar clientes. Usa Auth anônimo e RPCs reais para grupos/leases, além de testar criação e atualização do próprio perfil, leitura por membro compartilhado e negação para não membros ou após remoção da associação. A verificação de expiração pausa para uma atualização dirigida no SQL Editor do staging. Nunca use credenciais `service_role` nem o projeto distribuído.
 
@@ -132,7 +134,7 @@ O updater exige Releases públicas com os artefatos Squirrel; o `Setup.exe` isol
 A atualização automática usa o `autoUpdater` integrado do Electron e é executada somente no app Windows empacotado. Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos e limites.
 
 
-## Validação externa e bloqueios
+## Registros históricos e limites atuais
 
 O feed atual `0.2.0/RELEASES` aponta para `Larp-0.2.1-full.nupkg`, hash `C616D3D5ABB0D79D48BD69DB2CF59931AD16D6C7` e tamanho `165719082` bytes; o arquivo `RELEASES` publicado em `v0.2.1` contém a mesma linha. Os Setup baixados em streaming coincidem com os digests da API GitHub: `0.2.0` (`166080000` bytes, SHA-256 `78f0d4c569246d313ec1e7415fc5f9ed62f2bafd30fe2b8e499a2115cab2c2f2`) e `0.2.1` (`166530560` bytes, SHA-256 `70e2d85b534ac1c5dc3b011390ac5406fd6c07289b7ca12a12303c4b9be2ea30`). Nenhum Setup ou updater foi executado: `WindowsSandbox.exe` está ausente, a máquina é um Dell G15 físico e a sessão não tem elevação para criar um perfil descartável; instalação, upgrade, Pesquisa e remoção continuam bloqueados.
 
@@ -140,6 +142,6 @@ O harness Supabase inclui aquisição exclusiva do lease de tela. A migration `2
 
 O app 0.2.1 empacotado abriu com perfil temporário e cloud não configurado. Capturas reais de microfone e tela foram iniciadas e encerradas pelo renderer confiável e pelo handler de display do Electron. A tela de permissão negada/reautorização e a queda/restauração do estado cloud não foram exercitadas: falta staging para ativar um grupo e o app permanece em `not-configured`.
 
-O workflow manual de release está configurado, mas o `workflow_dispatch` não foi executado: `gh` não está instalado e `GH_TOKEN`/`GITHUB_TOKEN` não estão definidos. Nenhuma Release nova foi criada. ICE relay, reconexão P2P e carga de seis participantes continuam pendentes; há somente um PC, e RTT/perda não são expostos pela interface atual.
+ICE relay, reconexão P2P e carga de seis participantes continuam sem validação entre computadores independentes; publicar o instalador não comprova esses comportamentos.
 
 Assinatura comercial do instalador continua fora do escopo. Consulte [`docs/architecture.md`](docs/architecture.md) para contratos, fronteiras e matriz de validação.

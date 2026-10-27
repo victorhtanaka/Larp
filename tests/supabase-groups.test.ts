@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseGroupsService } from '../src/main/services/supabase-groups';
+import { groupPresenceFromSnapshot, requireGroupPresenceStatus, SupabaseGroupsService } from '../src/main/services/supabase-groups';
 
 interface ProfileRow {
   user_id: string;
@@ -125,4 +125,34 @@ test('profile save inserts new rows and updates existing rows without UPDATE on 
     avatarData: null,
   });
   assert.equal(rows.get(userId)?.display_name, 'Ana Costa');
+});
+
+test('presence status accepts only online and away', () => {
+  assert.equal(requireGroupPresenceStatus('online'), 'online');
+  assert.equal(requireGroupPresenceStatus('away'), 'away');
+  for (const invalid of ['offline', 'ONLINE', '', null, undefined, 1, {}]) {
+    assert.throws(() => requireGroupPresenceStatus(invalid), TypeError);
+  }
+});
+
+test('presence snapshots aggregate sessions and filter untrusted or non-member entries', () => {
+  const memberId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+  const otherMemberId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+  const outsiderId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3';
+  assert.deepEqual(groupPresenceFromSnapshot({
+    [memberId]: [
+      { userId: memberId, status: 'away' },
+      { userId: memberId, status: 'online' },
+    ],
+    [otherMemberId]: [
+      { userId: otherMemberId, status: 'away' },
+      { userId: otherMemberId, status: 'invalid' },
+      { userId: outsiderId, status: 'online' },
+    ],
+    [outsiderId]: [{ userId: outsiderId, status: 'online' }],
+  }, new Set([memberId, otherMemberId])), {
+    [memberId]: 'online',
+    [otherMemberId]: 'away',
+  });
+  assert.deepEqual(groupPresenceFromSnapshot(null, new Set([memberId])), {});
 });

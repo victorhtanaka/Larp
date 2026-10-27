@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { GroupMember } from '../shared/cloud-contracts';
+import type { GroupMember, GroupPresenceStatus } from '../shared/cloud-contracts';
 import type { LarpBridge } from '../shared/contracts';
 const bridge: LarpBridge = {
   getCloudStatus: () => ipcRenderer.invoke('cloud:get-status'),
@@ -39,6 +39,36 @@ const bridge: LarpBridge = {
       void subscription.then(() => ipcRenderer.invoke('cloud:unsubscribe-members', groupId)).catch(() => undefined);
     };
   },
+  subscribeCloudPresence: (groupId, onPresence, onError) => {
+    let active = true;
+    const updateListener = (_event: Electron.IpcRendererEvent, input: {
+      groupId: string;
+      presence: Record<string, GroupPresenceStatus>;
+      ready: boolean;
+    }) => {
+      if (active && input?.groupId === groupId && input.presence && typeof input.presence === 'object'
+        && typeof input.ready === 'boolean') {
+        onPresence(input.presence, input.ready);
+      }
+    };
+    const errorListener = (_event: Electron.IpcRendererEvent, input: { groupId: string; message: string }) => {
+      if (active && input?.groupId === groupId) onError(input.message);
+    };
+    ipcRenderer.on('cloud:presence-update', updateListener);
+    ipcRenderer.on('cloud:presence-error', errorListener);
+    const subscription = ipcRenderer.invoke('cloud:subscribe-presence', groupId);
+    void subscription.catch((cause: unknown) => {
+      if (active) onError(cause instanceof Error ? cause.message : 'Could not subscribe to group presence.');
+    });
+    return () => {
+      if (!active) return;
+      active = false;
+      ipcRenderer.removeListener('cloud:presence-update', updateListener);
+      ipcRenderer.removeListener('cloud:presence-error', errorListener);
+      void subscription.then(() => ipcRenderer.invoke('cloud:unsubscribe-presence', groupId)).catch(() => undefined);
+    };
+  },
+  setCloudPresence: (groupId, status) => ipcRenderer.invoke('cloud:set-presence', { groupId, status }),
   getTurnServers: (groupId) => ipcRenderer.invoke('cloud:get-turn-servers', groupId),
   listDisplaySources: () => ipcRenderer.invoke('display:list-sources'),
   prepareDisplayCapture: (sourceId, includeSystemAudio) =>

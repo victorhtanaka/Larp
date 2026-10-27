@@ -4,9 +4,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isRecord, validateProtocolEnvelope, type SignedProtocolEnvelope } from '../../shared/webrtc-protocol';
-import type { CloudConfigurationStatus, GroupInvite, GroupInviteSummary, GroupLeaveResult, GroupMember, GroupSummary, UserProfile, UserProfileUpdate } from '../../shared/cloud-contracts';
-import type { TurnCredentialServer } from '../../shared/contracts';
+import type { CloudConfigurationStatus, GroupInvite, GroupInviteSummary, GroupLeaveResult, GroupMember, GroupPresenceStatus, GroupSummary, UserProfile, UserProfileUpdate } from '../../shared/cloud-contracts';
 import { normalizeProfileFields, userProfileFrom } from '../profile-validation';
+import type { TurnCredentialServer } from '../../shared/contracts';
 
 interface LocalCloudConfig { supabaseUrl?: string; supabaseAnonKey?: string }
 interface GroupRow { id: string; name: string; created_at: string; member_count: number; role: 'owner' | 'member' }
@@ -16,6 +16,7 @@ interface InviteSummaryRow { id: string; created_at: string; expires_at: string 
 type SignalListener = (senderId: string, envelope: SignedProtocolEnvelope) => void;
 type MembershipListener = (members: GroupMember[]) => void;
 type MembershipErrorListener = (message: string) => void;
+type PresenceListener = (presence: Record<string, GroupPresenceStatus>, ready: boolean) => void;
 type SignalChannel = ReturnType<SupabaseClient['channel']>;
 interface SignalChannelState {
   channel: SignalChannel;
@@ -23,8 +24,37 @@ interface SignalChannelState {
   listeners: Set<SignalListener>;
   membershipListeners: Set<MembershipListener>;
   membershipErrorListeners: Set<MembershipErrorListener>;
+  presenceListeners: Set<PresenceListener>;
+  presenceErrorListeners: Set<MembershipErrorListener>;
   memberIds: Set<string>;
   activeSends: number;
+  presenceTracked: boolean;
+  presenceStatus: GroupPresenceStatus;
+  presenceReady: boolean;
+}
+
+export function requireGroupPresenceStatus(value: unknown): GroupPresenceStatus {
+  if (value !== 'online' && value !== 'away') throw new TypeError('Invalid group presence status.');
+  return value;
+}
+
+export function groupPresenceFromSnapshot(
+  snapshot: unknown,
+  memberIds: ReadonlySet<string>,
+): Record<string, GroupPresenceStatus> {
+  if (!isRecord(snapshot)) return {};
+  const result: Record<string, GroupPresenceStatus> = {};
+  for (const [presenceKey, sessions] of Object.entries(snapshot)) {
+    if (!memberIds.has(presenceKey) || !Array.isArray(sessions)) continue;
+    for (const session of sessions) {
+      if (!isRecord(session) || session.userId !== presenceKey
+        || (session.status !== 'online' && session.status !== 'away')) continue;
+      if (session.status === 'online' || result[presenceKey] === undefined) {
+        result[presenceKey] = session.status;
+      }
+    }
+  }
+  return result;
 }
 
 function isTargetedSignal(envelope: SignedProtocolEnvelope): envelope is Extract<SignedProtocolEnvelope,
@@ -492,6 +522,54 @@ export class SupabaseGroupsService {
       await this.releaseSignalChannel(groupId, state);
     };
   }
+  async subscribeRealtimePresence(
+    groupId: string,
+    listener: PresenceListener,
+    onError: MembershipErrorListener,
+  ): Promise<() => Promise<void>> {
+    if (typeof listener !== 'function' || typeof onError !== 'function') {
+      throw new TypeError('Group presence listeners are required.');
+    }
+    const state = await this.ensureSignalChannel(groupId);
+    const wasEmpty = state.presenceListeners.size === 0;
+    state.presenceListeners.add(listener);
+    state.presenceErrorListeners.add(onError);
+    if (wasEmpty) {
+      try {
+        await this.trackPresence(state, 'online');
+      } catch (error) {
+        state.presenceListeners.delete(listener);
+        state.presenceErrorListeners.delete(onError);
+        await this.releaseSignalChannel(groupId, state);
+        throw error;
+      }
+    }
+    listener(groupPresenceFromSnapshot(state.channel.presenceState(), state.memberIds), state.presenceReady);
+    let active = true;
+    return async () => {
+      if (!active) return;
+      active = false;
+      state.presenceListeners.delete(listener);
+      if (state.presenceListeners.size === 0 && state.presenceTracked) {
+        try {
+          await state.channel.untrack();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not stop cloud presence tracking.';
+          onError(message);
+        } finally {
+          state.presenceTracked = false;
+        }
+      }
+      state.presenceErrorListeners.delete(onError);
+      await this.releaseSignalChannel(groupId, state);
+    };
+  }
+
+  async setRealtimePresence(groupId: string, rawStatus: unknown): Promise<void> {
+    const status = requireGroupPresenceStatus(rawStatus);
+    const state = await this.ensureSignalChannel(groupId);
+    await this.trackPresence(state, status);
+  }
 
   async sendRealtimeSignal(groupId: string, rawEnvelope: unknown): Promise<void> {
     this.requireSignIn();
@@ -539,7 +617,11 @@ export class SupabaseGroupsService {
     if (!userId || !memberIds.has(userId)) throw new Error('Acesso de sinalização exige participação no grupo.');
 
     const channel = this.client.channel(`group:${groupId}`, {
-      config: { private: true, broadcast: { ack: true, self: false } },
+      config: {
+        private: true,
+        broadcast: { ack: true, self: false },
+        presence: { key: userId },
+      },
     });
     let openingSettled = false;
     let resolveOpening!: () => void;
@@ -558,6 +640,7 @@ export class SupabaseGroupsService {
       if (!memberRefresh) {
         memberRefresh = this.getMembers(groupId).then((members) => {
           for (const listener of state.membershipListeners) listener(members);
+          this.emitPresence(state);
           return members;
         }).catch((cause: unknown) => {
           const message = cause instanceof Error ? cause.message : 'Could not refresh group membership.';
@@ -573,8 +656,13 @@ export class SupabaseGroupsService {
       listeners: new Set(),
       membershipListeners: new Set(),
       membershipErrorListeners: new Set(),
+      presenceListeners: new Set(),
+      presenceErrorListeners: new Set(),
       memberIds,
       activeSends: 0,
+      presenceTracked: false,
+      presenceStatus: 'online',
+      presenceReady: false,
     };
     channel.on('broadcast', { event: REALTIME_SIGNAL_EVENT }, ({ payload }) => {
       if (!isRecord(payload) || !('envelope' in payload)) return;
@@ -593,6 +681,10 @@ export class SupabaseGroupsService {
       }
       for (const callback of state.listeners) callback(envelope.senderId, envelope);
     });
+    channel.on('presence', { event: 'sync' }, () => {
+      state.presenceReady = true;
+      this.emitPresence(state);
+    });
     channel.on('postgres_changes', {
       event: '*',
       schema: 'public',
@@ -609,6 +701,13 @@ export class SupabaseGroupsService {
         openingSettled = true;
         clearTimeout(openingTimer);
         resolveOpening();
+      } else if (status === 'SUBSCRIBED' && state.presenceTracked) {
+        void this.trackPresence(state, state.presenceStatus).catch((cause: unknown) => {
+          state.presenceReady = false;
+          this.emitPresence(state);
+          const message = cause instanceof Error ? cause.message : 'Could not restore cloud presence.';
+          for (const listener of state.presenceErrorListeners) listener(message);
+        });
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         const message = error?.message ?? `A sinalização privada falhou: ${status}.`;
         if (!openingSettled) {
@@ -616,9 +715,12 @@ export class SupabaseGroupsService {
           clearTimeout(openingTimer);
           rejectOpening(new Error(message));
         } else {
+          state.presenceReady = false;
+          this.emitPresence(state);
           for (const listener of state.membershipErrorListeners) listener(message);
+          for (const listener of state.presenceErrorListeners) listener(message);
         }
-        }
+      }
     });
     this.signalChannels.set(groupId, state);
     try {
@@ -634,10 +736,25 @@ export class SupabaseGroupsService {
   }
 
   private async releaseSignalChannel(groupId: string, state: SignalChannelState): Promise<void> {
-    if (state.listeners.size > 0 || state.membershipListeners.size > 0 || state.activeSends > 0
-      || this.signalChannels.get(groupId) !== state) return;
+    if (state.listeners.size > 0 || state.membershipListeners.size > 0 || state.presenceListeners.size > 0
+      || state.activeSends > 0 || this.signalChannels.get(groupId) !== state) return;
     this.signalChannels.delete(groupId);
     await this.client.removeChannel(state.channel);
+  }
+
+  private emitPresence(state: SignalChannelState): void {
+    const presence = groupPresenceFromSnapshot(state.channel.presenceState(), state.memberIds);
+    for (const listener of state.presenceListeners) listener(presence, state.presenceReady);
+  }
+
+  private async trackPresence(state: SignalChannelState, status: GroupPresenceStatus): Promise<void> {
+    this.requireSignIn();
+    const userId = this.signedInUserId;
+    if (!userId || !state.memberIds.has(userId)) throw new Error('Presence tracking requires group membership.');
+    const result = await state.channel.track({ userId, status });
+    if (result !== 'ok') throw new Error('Supabase did not confirm group presence tracking.');
+    state.presenceTracked = true;
+    state.presenceStatus = status;
   }
 
   private requireSignIn(): void {

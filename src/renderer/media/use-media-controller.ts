@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SelectedDisplaySource } from '../../shared/contracts';
 import { MediaQualityController, type VideoContentPreference } from './quality';
-import { MediaSession, type MediaDeviceOption } from './session';
+import { MediaSession, supportsNoiseSuppression, type MediaDeviceOption } from './session';
 import type { PeerMesh } from '../rtc/peer-mesh';
 import { DEFAULT_PLAYBACK_VOLUME, loadPlaybackVolume, normalizePlaybackVolume, savePlaybackVolume } from './playback-volume';
+import { DEFAULT_NOISE_SUPPRESSION, loadNoiseSuppression, saveNoiseSuppression } from './noise-suppression';
+import { RemoteAudioParticipants } from './remote-audio-participants';
+import { VoiceActivityMonitor } from './voice-activity';
 
 interface MediaControllerOptions {
   groupId?: string;
   mesh: PeerMesh | null;
   connectedPeerIds: readonly string[];
+  localParticipantId?: string;
 }
-export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaControllerOptions) {
+export function useMediaController({ groupId, mesh, connectedPeerIds, localParticipantId }: MediaControllerOptions) {
   const [mediaReady, setMediaReady] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceOption[]>([]);
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('');
@@ -28,6 +32,15 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       return DEFAULT_PLAYBACK_VOLUME;
     }
   });
+  const [noiseSuppressionEnabled, setNoiseSuppressionState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_NOISE_SUPPRESSION;
+    try {
+      return loadNoiseSuppression(window.localStorage);
+    } catch {
+      return DEFAULT_NOISE_SUPPRESSION;
+    }
+  });
+  const [noiseSuppressionSupported, setNoiseSuppressionSupported] = useState(false);
   const [microphoneTestActive, setMicrophoneTestActive] = useState(false);
   const [microphoneLevel, setMicrophoneLevel] = useState(0);
   const [displaySources, setDisplaySources] = useState<SelectedDisplaySource[]>([]);
@@ -42,11 +55,15 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
 
+  const [remoteAudioPeerIds, setRemoteAudioPeerIds] = useState<string[]>([]);
+  const [speakingParticipantIds, setSpeakingParticipantIds] = useState<string[]>([]);
   const sessionRef = useRef<MediaSession | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioStreamRef = useRef<MediaStream | null>(null);
+  const voiceActivityRef = useRef<VoiceActivityMonitor | null>(null);
   const remoteVideoStreamRef = useRef<MediaStream | null>(null);
+  const remoteAudioParticipantsRef = useRef(new RemoteAudioParticipants());
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement | null>(null);
   const shareGroupIdRef = useRef<string | null>(null);
@@ -57,6 +74,27 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   const qualityControllerRef = useRef(new MediaQualityController());
 
   callActiveRef.current = callActive;
+  useEffect(() => {
+    if (!groupId || !mesh) {
+      voiceActivityRef.current = null;
+      setSpeakingParticipantIds([]);
+      return;
+    }
+    let active = true;
+    const monitor = new VoiceActivityMonitor({
+      onActiveSpeakers: (ids) => {
+        if (active) setSpeakingParticipantIds([...ids].sort());
+      },
+    });
+    voiceActivityRef.current = monitor;
+    const timer = setInterval(() => monitor.sample(), 100);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      if (voiceActivityRef.current === monitor) voiceActivityRef.current = null;
+      void monitor.close();
+    };
+  }, [groupId, mesh]);
 
   const releaseShareLease = useCallback(async (expectedGroupId?: string) => {
     const leaseGroupId = shareGroupIdRef.current;
@@ -81,16 +119,22 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   useEffect(() => {
     if (!groupId || !mesh) {
       setMediaReady(false);
+      setNoiseSuppressionSupported(false);
       setCallActive(false);
       setMicMuted(false);
+      for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
+      for (const track of remoteAudioStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
+      setSpeakingParticipantIds([]);
       microphoneStreamRef.current = null;
       displayStreamRef.current = null;
+      remoteAudioStreamRef.current = null;
+      remoteAudioParticipantsRef.current.clear();
+      setRemoteAudioPeerIds([]);
       setDisplayStream(null);
       setShareActive(false);
       setShareSourceName('');
       setRemoteVideoStream(null);
       remoteVideoStreamRef.current = null;
-      remoteAudioStreamRef.current = null;
       if (audioElementRef.current) audioElementRef.current.srcObject = null;
       return;
     }
@@ -118,6 +162,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       },
     });
     sessionRef.current = session;
+    setNoiseSuppressionSupported(supportsNoiseSuppression());
     if (audioElementRef.current) session.attachOutput(audioElementRef.current);
     session.setPlaybackVolume(playbackVolume);
     session.setPlaybackMuted(playbackMuted);
@@ -145,9 +190,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       void session.close();
       const leaseGroupId = shareGroupIdRef.current;
       if (leaseGroupId) void releaseShareLease(leaseGroupId);
+      for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
+      for (const track of remoteAudioStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
       microphoneStreamRef.current = null;
       displayStreamRef.current = null;
       remoteAudioStreamRef.current = null;
+      remoteAudioParticipantsRef.current.clear();
+      setRemoteAudioPeerIds([]);
       remoteVideoStreamRef.current = null;
       setMediaReady(false);
       setCallActive(false);
@@ -192,8 +241,15 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     if (stream) void audio.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
   }, [remoteVideoStream, mediaReady]);
 
-  const onRemoteTrack = useCallback((track: MediaStreamTrack) => {
+  const onRemoteTrack = useCallback((peerId: string, track: MediaStreamTrack) => {
     if (track.kind === 'audio') {
+      if (track.readyState !== 'live') return;
+      const addition = remoteAudioParticipantsRef.current.add(peerId, track);
+      if (addition === 'duplicate') return;
+      voiceActivityRef.current?.addTrack(peerId, track);
+      if (addition === 'peer-joined') {
+        setRemoteAudioPeerIds([...remoteAudioParticipantsRef.current.peerIds]);
+      }
       const stream = remoteAudioStreamRef.current ?? new MediaStream();
       remoteAudioStreamRef.current = stream;
       if (!stream.getTracks().includes(track)) stream.addTrack(track);
@@ -202,8 +258,12 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
         void audioElementRef.current.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
       }
       track.addEventListener('ended', () => {
+        voiceActivityRef.current?.removeTrack(track);
         stream.removeTrack(track);
         if (stream.getTracks().length === 0) remoteAudioStreamRef.current = null;
+        if (remoteAudioParticipantsRef.current.remove(peerId, track) === 'peer-left') {
+          setRemoteAudioPeerIds([...remoteAudioParticipantsRef.current.peerIds]);
+        }
       }, { once: true });
       return;
     }
@@ -400,7 +460,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     setAudioError('');
     try {
       if (requestPermission) {
-        const permission = await session.requestMicrophonePermission();
+        const permission = await session.requestMicrophonePermission(noiseSuppressionEnabled);
         if (permission.state !== 'active') {
           setAudioError(permission.state === 'permission-denied'
             ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
@@ -423,7 +483,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     } finally {
       setAudioBusy(false);
     }
-  }, []);
+  }, [noiseSuppressionEnabled]);
 
   const selectMicrophone = useCallback((deviceId: string) => {
     if (callActive) {
@@ -480,7 +540,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     setAudioError('');
     try {
       if (!microphoneStreamRef.current?.getAudioTracks().some((track) => track.readyState === 'live')) {
-        const capture = await session.selectMicrophone(selectedMicrophoneId);
+        const capture = await session.selectMicrophone(selectedMicrophoneId, noiseSuppressionEnabled);
         if (capture.state !== 'active' || !capture.stream) {
           setAudioError(capture.state === 'permission-denied'
             ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
@@ -502,7 +562,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     } finally {
       setAudioBusy(false);
     }
-  }, [selectedMicrophoneId, microphoneTestActive, stopMicrophoneTest]);
+  }, [selectedMicrophoneId, microphoneTestActive, stopMicrophoneTest, noiseSuppressionEnabled]);
 
   const startCall = useCallback(async () => {
     if (!groupId || !mesh || connectedPeerIds.length === 0) {
@@ -519,7 +579,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     try {
       let stream = microphoneStreamRef.current;
       if (!stream?.getAudioTracks().some((track) => track.readyState === 'live')) {
-        const capture = await session.selectMicrophone(selectedMicrophoneId);
+        const capture = await session.selectMicrophone(selectedMicrophoneId, noiseSuppressionEnabled);
         if (capture.state !== 'active' || !capture.stream) {
           setAudioError(capture.state === 'permission-denied'
             ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
@@ -532,6 +592,9 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
         microphoneStreamRef.current = stream;
       }
       session.setMicrophoneMuted(micMuted);
+      if (localParticipantId) {
+        for (const track of stream.getAudioTracks()) voiceActivityRef.current?.addTrack(localParticipantId, track);
+      }
       for (const peerId of connectedPeerIds) await attachStreamToPeer(peerId, stream);
       setCallActive(true);
       return true;
@@ -541,13 +604,14 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     } finally {
       setAudioBusy(false);
     }
-  }, [groupId, mesh, connectedPeerIds, selectedMicrophoneId, micMuted, attachStreamToPeer]);
+  }, [groupId, mesh, connectedPeerIds, selectedMicrophoneId, micMuted, attachStreamToPeer, noiseSuppressionEnabled, localParticipantId]);
 
   const stopCall = useCallback(async () => {
     setCallActive(false);
     setMicMuted(false);
     sessionRef.current?.setMicrophoneMuted(false);
     await sessionRef.current?.stopMicrophone();
+    for (const track of microphoneStreamRef.current?.getAudioTracks() ?? []) voiceActivityRef.current?.removeTrack(track);
     microphoneStreamRef.current = null;
   }, []);
 
@@ -576,6 +640,19 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       // The volume still applies until this window closes.
     }
   }, []);
+  const setNoiseSuppression = useCallback((enabled: boolean) => {
+    if (audioBusy || callActive || microphoneTestActive || enabled === noiseSuppressionEnabled) return;
+    setNoiseSuppressionState(enabled);
+    try {
+      saveNoiseSuppression(window.localStorage, enabled);
+    } catch {
+      // The setting still applies until this window closes.
+    }
+    if (microphoneStreamRef.current) {
+      microphoneStreamRef.current = null;
+      void sessionRef.current?.stopMicrophone();
+    }
+  }, [audioBusy, callActive, microphoneTestActive, noiseSuppressionEnabled]);
 
   const refreshDisplaySources = useCallback(async () => {
     const result = await sessionRef.current?.listDisplaySources();
@@ -641,10 +718,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   }, []);
 
   const handleRemoteTrack = useCallback((peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) => {
-    void peerId;
     void streams;
-    onRemoteTrack(track);
+    onRemoteTrack(peerId, track);
   }, [onRemoteTrack]);
+
+  const playCallJoinSound = useCallback(async () => {
+    await sessionRef.current?.playSafeTone(880, 220);
+  }, []);
 
   return {
     mediaReady,
@@ -655,11 +735,16 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     selectedOutputId,
     audioBusy,
     audioError,
+    remoteAudioPeerIds,
+    speakingParticipantIds,
     callActive,
     micMuted,
     playbackMuted,
     playbackVolume,
     setPlaybackVolume,
+    noiseSuppressionEnabled,
+    noiseSuppressionSupported,
+    setNoiseSuppression,
     microphoneTestActive,
     microphoneLevel,
     displaySources,
@@ -680,6 +765,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     audioElementRef,
     screenVideoRef,
     handleRemoteTrack,
+    playCallJoinSound,
     refreshAudioDevices,
     selectMicrophone,
     selectAudioOutput,

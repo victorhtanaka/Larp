@@ -1,7 +1,7 @@
 {
   "name": "larp",
   "productName": "Larp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Chat privado de voz e compartilhamento de tela para Windows",
   "main": ".vite/build/main.cjs",
   "private": true,
@@ -14,7 +14,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/database.test.ts tests/profile-validation.test.ts tests/supabase-groups.test.ts tests/protocol.test.ts tests/quality.test.ts tests/presentation.test.ts tests/media-session.test.ts",
+    "test": "tsx --test tests/database.test.ts tests/profile-validation.test.ts tests/supabase-groups.test.ts tests/protocol.test.ts tests/quality.test.ts tests/presentation.test.ts tests/media-session.test.ts tests/notifications.test.ts tests/remote-audio-participants.test.ts tests/voice-activity.test.ts tests/presence.test.ts",
     "test:supabase": "tsx tests/supabase.integration.ts"
   },
   "dependencies": {
