@@ -5,8 +5,8 @@ import { USER_PROFILE_AVATAR_MAX_BYTES, USER_PROFILE_NAME_MAX_LENGTH, USER_PROFI
 import type { SignedChatEnvelope } from '../shared/webrtc-protocol';
 import { createGroupPeerMesh } from './rtc/create-peer-mesh';
 import type { PeerMesh, PeerConnectionStatus } from './rtc/peer-mesh';
-import type { PeerMediaStats } from './media/quality';
 import { useMediaController } from './media/use-media-controller';
+import { connectionPresentation } from './presentation';
 import larpWordmarkUrl from '../assets/larp-wordmark.png';
 
 const INITIAL_CLOUD_STATUS: CloudConnectionStatus = {
@@ -15,10 +15,8 @@ const INITIAL_CLOUD_STATUS: CloudConnectionStatus = {
   groups: [],
 };
 
-function describeError(error: unknown, fallback: string): string {
-  return error instanceof Error
-    ? error.message.replace(/^Error invoking remote method '[^']+':\s*/, '')
-    : fallback;
+function describeError(_error: unknown, fallback: string): string {
+  return fallback;
 }
 
 type IconName = 'bubble' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark';
@@ -73,12 +71,12 @@ function ProfileAvatar({ profile, initials, className }: {
 
 async function avatarDataFromFile(file: File): Promise<string> {
   if (file.size < 1 || file.size > USER_PROFILE_SOURCE_MAX_BYTES) {
-    throw new Error('Escolha uma imagem com até 8 MiB.');
+    throw new Error('A foto selecionada não pode ser usada. Escolha outra imagem.');
   }
   const image = await createImageBitmap(file);
   try {
     if (image.width > 8192 || image.height > 8192 || image.width * image.height > 33_554_432) {
-      throw new Error('A imagem excede o limite de resolução.');
+      throw new Error('Escolha uma imagem menor para a foto de perfil.');
     }
     const canvas = document.createElement('canvas');
     canvas.width = 128;
@@ -103,12 +101,12 @@ async function avatarDataFromFile(file: File): Promise<string> {
         canvas.toBlob(resolve, 'image/webp', quality);
       });
       if (!thumbnail || thumbnail.type !== 'image/webp') {
-        throw new Error('Este computador não conseguiu criar uma foto WebP.');
+        throw new Error('Não foi possível preparar a foto neste computador.');
       }
       if (thumbnail.size <= USER_PROFILE_AVATAR_MAX_BYTES) break;
     }
     if (!thumbnail || thumbnail.size > USER_PROFILE_AVATAR_MAX_BYTES) {
-      throw new Error('A miniatura da foto excede 48 KiB.');
+      throw new Error('A foto ficou grande demais. Escolha outra imagem.');
     }
     return await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -139,7 +137,7 @@ function Message({ message, localParticipantId, profile }: {
       <div className="message-content">
         <div className="message-meta">
           <span className="message-author">{profile?.displayName ?? message.authorName}</span>
-          <span className={`message-origin ${isLocal ? 'origin-local' : ''}`}>{isLocal ? 'Este PC' : 'P2P assinado'}</span>
+          <span className={`message-origin ${isLocal ? 'origin-local' : ''}`}>{isLocal ? 'Você' : 'Grupo'}</span>
           <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
         </div>
         <p>{message.content}</p>
@@ -154,7 +152,7 @@ function toPeerChatMessage(message: SignedChatEnvelope, localParticipantId?: str
     id: message.messageId,
     groupId: message.groupId,
     authorId: message.senderId,
-    authorName: isLocal ? 'Este computador' : `PC · ${message.senderId.slice(-6).toUpperCase()}`,
+    authorName: isLocal ? 'Este computador' : `Participante · ${message.senderId.slice(-6).toUpperCase()}`,
     authorInitials: isLocal ? 'PC' : message.senderId.slice(-2).toUpperCase(),
     content: message.content,
     sequence: message.sequence,
@@ -162,18 +160,6 @@ function toPeerChatMessage(message: SignedChatEnvelope, localParticipantId?: str
   };
 }
 
-function describePeerMediaStats(stats: PeerMediaStats): string {
-  const resolution = stats.resolution.value ? `${stats.resolution.value.width}×${stats.resolution.value.height}` : 'resolução indisponível';
-  const fps = stats.framesPerSecond.value === null ? 'FPS indisponível' : `${Math.round(stats.framesPerSecond.value)} FPS`;
-  const codec = stats.codec.value?.replace(/^video\//u, '') ?? 'codec indisponível';
-  const bitrate = stats.uploadBitrate.value === null
-    ? 'upload indisponível'
-    : `${(stats.uploadBitrate.value / 1_000_000).toFixed(1)} Mb/s`;
-  const path = stats.path.value?.localCandidateType === 'relay' || stats.path.value?.remoteCandidateType === 'relay'
-    ? 'TURN'
-    : stats.path.source === 'measured' ? 'direto' : 'caminho indisponível';
-  return `${resolution} · ${fps} · ${codec} · ${bitrate} · ${path}`;
-}
 
 function App() {
   const [cloudStatus, setCloudStatus] = useState(INITIAL_CLOUD_STATUS);
@@ -225,6 +211,7 @@ function App() {
   const helpTriggerRef = useRef<HTMLButtonElement | null>(null);
   const screenViewerToggleRef = useRef<HTMLButtonElement>(null);
   const offlineMode = cloudStatus.state === 'unavailable' || cloudStatus.state === 'not-configured';
+  const connectionCopy = connectionPresentation(cloudStatus);
   const listedCloudGroups = cloudStatus.state === 'ready'
     ? cloudStatus.groups
     : offlineMode ? cachedCloudGroups : [];
@@ -575,12 +562,12 @@ function App() {
             if (current) setPeerStates((previous) => ({ ...previous, [peerId]: state }));
           },
           onTrack: media.handleRemoteTrack,
-          onError: (message) => { if (current) setPeerError(message); },
+          onError: (_message) => { if (current) setPeerError('Não foi possível conectar aos participantes. Tente novamente.'); },
         });
         meshRef.current = mesh;
         setMeshReady(true);
       } catch (cause) {
-        setPeerError(describeError(cause, 'Não foi possível iniciar o chat P2P.'));
+        setPeerError(describeError(cause, 'Não foi possível iniciar a conversa do grupo.'));
         setMeshReady(false);
       }
     };
@@ -649,13 +636,13 @@ function App() {
       messageId = crypto.randomUUID();
       await meshRef.current.sendMessage({ messageId, sequence, content });
       setDraft('');
-      setNotice('Mensagem assinada e salva neste PC; aguardando confirmações P2P.');
+      setNotice('Mensagem salva neste computador. Aguardando participantes.');
     } catch (cause) {
       if (messageId && persistedCloudMessageIds.current.has(messageId)) {
         setDraft('');
-        setNotice('Mensagem assinada e salva neste PC; a entrega será tentada quando houver conexão P2P.');
+        setNotice('Mensagem salva neste computador. A entrega será tentada quando houver conexão.');
       } else {
-        setError(describeError(cause, 'Não foi possível salvar ou transmitir a mensagem.'));
+        setError(describeError(cause, 'Não foi possível enviar a mensagem.'));
       }
     } finally {
       setSending(false);
@@ -871,7 +858,7 @@ function App() {
   };
 
   const connectedPeerCount = Object.values(peerStates).filter((state) => state === 'connected').length;
-  const remotePeerCount = Math.max(0, cloudMembers.length - (localCloudUserId ? 1 : 0));
+  const connectedPeerLabel = connectedPeerCount === 1 ? '1 participante conectado' : `${connectedPeerCount} participantes conectados`;
   const visibleMembers = activeCloudGroup ? cloudMembers : cachedCloudGroup ? cachedCloudMembers : [];
   const membersLoading = activeCloudGroup ? memberLoading : cachedCloudGroup && cachedHistoryLoading;
   const localParticipantId = activeCloudGroup
@@ -893,11 +880,11 @@ function App() {
           <span className="build-chip">BETA</span>
         </div>
 
-        <div className={`connection-card connection-${cloudStatus.state}`} aria-label={`Estado da sinalização: ${cloudStatus.state}`}>
+        <div className={`connection-card connection-${cloudStatus.state}`} aria-label={connectionCopy.label}>
           <span className="connection-indicator" />
           <div>
-            <strong>{displayCloudGroup ? activeCloudGroup ? meshReady ? 'Chat P2P preparado' : 'Preparando chat P2P' : 'Histórico offline' : cloudStatus.state === 'ready' ? 'Sinalização disponível' : cloudStatus.state === 'connecting' ? 'Conectando ao serviço' : cloudStatus.state === 'unavailable' ? 'Serviço de grupos indisponível' : 'Supabase não configurado'}</strong>
-            <span>{displayCloudGroup ? activeCloudGroup ? `${connectedPeerCount}/${remotePeerCount} conexões WebRTC` : 'Somente leitura neste PC' : cloudStatus.state === 'ready' ? 'Selecione ou crie um grupo' : cloudStatus.state === 'connecting' ? 'Aguardando resposta…' : 'Verifique a configuração'}</span>
+            <strong>{connectionCopy.label}</strong>
+            <span>{connectionCopy.description}</span>
 
           </div>
           <Icon name={cloudStatus.state === 'ready' ? 'users' : 'lock'} size={15} />
@@ -912,7 +899,7 @@ function App() {
 
         <nav className="group-list" aria-label="Grupos privados">
           {cloudStatus.state === 'connecting' ? (
-            <p className="group-empty">Conectando ao serviço…</p>
+            <p className="group-empty">Conectando…</p>
           ) : !cachedGroupsLoaded && offlineMode ? (
             <p className="group-empty">Lendo grupos salvos…</p>
           ) : listedCloudGroups.length ? listedCloudGroups.map((group, index) => (
@@ -926,7 +913,7 @@ function App() {
               <span className={`group-icon group-color-${index % 3}`}><Icon name={index === 1 ? 'grid' : 'bubble'} size={17} /></span>
               <span className="group-copy">
                 <strong>{group.name}</strong>
-                <span>{group.memberCount}/6 membros{cachedCloudGroup ? ' · offline' : ''}</span>
+                <span>{group.memberCount}/6 membros{cachedCloudGroup ? ' · sem conexão' : ''}</span>
               </span>
               {group.id === selectedCloudGroupId && <span className="active-mark" aria-hidden="true" />}
             </button>
@@ -939,7 +926,7 @@ function App() {
 
         <button className="invite-button" type="button" onClick={openGroupManager}>
           <span className="invite-icon"><Icon name="plus" size={17} /></span>
-          <span>{displayCloudGroup ? cloudStatus.state === 'ready' ? 'Convidar pessoas' : 'Histórico offline' : 'Criar ou entrar em grupo'}</span>
+          <span>{displayCloudGroup ? cloudStatus.state === 'ready' ? 'Convidar pessoas' : 'Histórico somente para leitura' : 'Criar ou entrar em grupo'}</span>
           {activeCloudGroup && activeCloudGroup.role !== 'owner' && <span className="invite-lock"><Icon name="lock" size={13} /></span>}
         </button>
 
@@ -951,7 +938,7 @@ function App() {
           />
           <div className="profile-copy">
             <strong>{selfProfile?.displayName || (identity ? 'Este computador' : 'Larp')}</strong>
-            <span>{selfProfile ? 'Perfil dos grupos em comum' : identity ? 'Identidade Ed25519 protegida' : 'Identidade indisponível'}</span>
+            <span>{selfProfile ? 'Perfil dos grupos em comum' : identity ? 'Identidade protegida neste computador' : 'Identidade indisponível'}</span>
           </div>
           <button
             className="profile-edit"
@@ -972,42 +959,31 @@ function App() {
       <section className="chat-panel" aria-label="Conversa">
         <header className="chat-header">
           <div className="chat-heading">
-            <h1>{activeGroup?.name ?? (cloudStatus.state === 'connecting' ? 'Conectando…' : cloudStatus.state === 'ready' ? 'Nenhum grupo selecionado' : 'Grupos indisponíveis')}</h1>
-            <p>{activeCloudGroup ? `${activeCloudGroup.memberCount} membros autorizados` : cachedCloudGroup ? `${cachedCloudGroup.memberCount} membros · somente leitura neste PC` : cloudStatus.state === 'ready' ? 'Crie um grupo ou aceite um convite' : cloudStatus.detail}</p>
+            <h1>{activeGroup?.name ?? (cloudStatus.state === 'connecting' ? 'Conectando…' : 'Grupos')}</h1>
+            <p>{activeCloudGroup ? `${activeCloudGroup.memberCount} membros autorizados` : cachedCloudGroup ? `${cachedCloudGroup.memberCount} membros · somente leitura neste computador` : null}</p>
           </div>
           <div className="header-actions">
-            <span className="header-local-badge"><span />{activeCloudGroup ? `Supabase · ${connectedPeerCount} P2P` : cachedCloudGroup ? 'Offline · somente leitura' : cloudStatus.state === 'connecting' ? 'Conectando' : 'Sem grupo ativo'}</span>
-            <button className="icon-button help-trigger" type="button" aria-label="Ver configuração e estado da conexão" onClick={openHelp}>
+            {activeCloudGroup ? (
+              <span className="header-local-badge">{connectedPeerLabel}</span>
+            ) : cachedCloudGroup ? (
+              <span className="header-local-badge">Histórico · somente leitura</span>
+            ) : null}
+            <button className="icon-button help-trigger" type="button" aria-label="Ver estado da conexão" onClick={openHelp}>
               <Icon name="info" size={18} />
             </button>
           </div>
         </header>
 
 
-        <div className={`offline-banner banner-${cloudStatus.state}`} role="status">
-          <span className="banner-icon"><Icon name={cachedCloudGroup ? 'lock' : cloudStatus.state === 'ready' ? 'users' : 'info'} size={16} /></span>
-          <p>
-            <strong>{cachedCloudGroup ? 'Histórico offline disponível.' : activeCloudGroup ? 'Grupo privado conectado.' : cloudStatus.state === 'ready' ? 'Sinalização Supabase disponível.' : cloudStatus.state === 'connecting' ? 'Verificando a conexão.' : cloudStatus.state === 'unavailable' ? 'Serviço de grupos indisponível.' : 'Supabase não configurado.'}</strong>
-            {' '}{displayCloudGroup
-              ? activeCloudGroup
-                ? connectedPeerCount > 0
-                  ? `${connectedPeerCount} conexão(ões) WebRTC ativas. Mensagens são assinadas e salvas neste PC antes de sincronizar.`
-                  : meshReady
-                    ? 'Sem conexões WebRTC agora. Mensagens novas ficam salvas neste PC e serão sincronizadas quando um membro estiver acessível.'
-                    : 'Preparando sinalização e identidade do grupo; nenhuma mensagem será enviada sem conexão P2P.'
-                : 'O serviço de grupos está offline. Mensagens e membros em cache são somente leitura neste computador.'
-              : cloudStatus.state === 'ready'
-                ? 'Crie um grupo privado ou entre com um convite de uso único.'
-                : cloudStatus.state === 'connecting'
-                  ? 'Aguarde a resposta do serviço antes de abrir grupos.'
-                  : cachedGroupsLoaded
-                    ? `${cloudStatus.detail} Não há grupos salvos neste computador.`
-                    : 'Verificando os grupos salvos neste computador.'}
-          </p>
-          <button type="button" onClick={cloudStatus.state === 'ready' ? openGroupManager : openHelp}>
-            {cloudStatus.state === 'ready' ? 'Grupos' : cloudStatus.state === 'connecting' ? 'Estado' : 'Conexão'} <Icon name="arrow" size={14} />
-          </button>
-        </div>
+        {!activeCloudGroup && cachedCloudGroup && (
+          <div className={`offline-banner banner-${cloudStatus.state}`} role="status">
+            <span className="banner-icon"><Icon name="lock" size={16} /></span>
+            <p><strong>Histórico somente para leitura.</strong> Os dados salvos neste computador não podem ser alterados sem conexão.</p>
+            <button type="button" onClick={openHelp}>
+              Ver conexão <Icon name="arrow" size={14} />
+            </button>
+          </div>
+        )}
 
 
         <section className="message-list" aria-label={`Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live={screenViewerExpanded ? 'off' : 'polite'}>
@@ -1016,7 +992,6 @@ function App() {
               <div className="screen-stage-header">
                 <div className="screen-stage-heading">
                   <strong>{media.displayStream ? `Você está compartilhando · ${media.shareSourceName}` : 'Tela compartilhada ao vivo'}</strong>
-                  {media.shareActive && <span>{media.shareStats.length ? media.shareStats.map(describePeerMediaStats).join('  |  ') : 'Aguardando métricas de envio…'}</span>}
                 </div>
                 <button
                   ref={screenViewerToggleRef}
@@ -1036,41 +1011,41 @@ function App() {
             </div>
           )}
           {cloudStatus.state === 'connecting' ? (
-            <div className="loading-state"><span className="loading-dot" />Carregando grupos do serviço…</div>
+            <div className="loading-state"><span className="loading-dot" />Carregando grupos…</div>
           ) : displayCloudGroup ? activeCloudGroup ? (
             historyLoading ? (
-              <div className="loading-state"><span className="loading-dot" />Abrindo histórico assinado neste computador…</div>
+              <div className="loading-state"><span className="loading-dot" />Abrindo o histórico neste computador…</div>
             ) : cloudMessagesGroupId === activeCloudGroup.id && cloudMessages.length ? (
               <>
-                <div className="date-divider"><span>Histórico P2P assinado</span></div>
+                <div className="date-divider"><span>Mensagens anteriores</span></div>
                 {cloudMessages.map((message) => (
                   <Message key={message.id} message={message} localParticipantId={localCloudUserId} profile={profilesByUserId.get(message.authorId)} />
                 ))}
-                <div className="local-note"><span /> Mensagens assinadas; o histórico fica armazenado neste computador.</div>
+                <div className="local-note"><span /> O histórico fica armazenado neste computador.</div>
               </>
             ) : peerError ? (
               <div className="empty-state"><Icon name="info" size={22} /><p>{peerError}</p></div>
             ) : (
-              <div className="empty-state"><Icon name="bubble" size={22} /><p>{memberLoading ? 'Carregando membros autorizados…' : meshReady ? 'Ainda não há mensagens assinadas neste histórico.' : 'Preparando a conexão segura do grupo…'}</p></div>
+              <div className="empty-state"><Icon name="bubble" size={22} /><p>{memberLoading ? 'Carregando participantes…' : meshReady ? 'Ainda não há mensagens neste grupo.' : 'Preparando a conversa do grupo…'}</p></div>
             )
           ) : cachedHistoryLoading ? (
-            <div className="loading-state"><span className="loading-dot" />Verificando histórico P2P assinado neste computador…</div>
+            <div className="loading-state"><span className="loading-dot" />Verificando o histórico salvo neste computador…</div>
           ) : cachedHistoryError ? (
             <div className="empty-state"><Icon name="info" size={22} /><p>{cachedHistoryError}</p></div>
           ) : cachedMessages.length ? (
             <>
-              <div className="date-divider"><span>Histórico salvo neste PC · somente leitura</span></div>
+              <div className="date-divider"><span>Histórico salvo neste computador · somente leitura</span></div>
               {cachedMessages.map((message) => <Message key={message.id} message={message} localParticipantId={localParticipantId} profile={profilesByUserId.get(message.authorId)} />)}
-              <div className="local-note"><span /> Mensagens assinadas e metadados ficam armazenados neste computador.</div>
+              <div className="local-note"><span /> O histórico fica armazenado neste computador.</div>
             </>
           ) : (
-            <div className="empty-state"><Icon name="bubble" size={22} /><p>Não há mensagens assinadas deste grupo salvas neste computador.</p></div>
+            <div className="empty-state"><Icon name="bubble" size={22} /><p>Não há mensagens deste grupo salvas neste computador.</p></div>
           ) : cloudStatus.state === 'ready' ? (
             <div className="empty-state"><Icon name="users" size={22} /><p>Crie um grupo privado ou aceite um convite para começar.</p><button className="inline-action" type="button" onClick={openGroupManager}>Gerenciar grupos</button></div>
           ) : !cachedGroupsLoaded ? (
             <div className="loading-state"><span className="loading-dot" />Lendo grupos salvos neste computador…</div>
           ) : (
-            <div className="empty-state"><Icon name="info" size={22} /><p>{cloudStatus.detail} Nenhum grupo real está disponível neste computador. Verifique a conexão ou configuração do Supabase.</p><button className="inline-action" type="button" onClick={openHelp}>Ver conexão</button></div>
+            <div className="empty-state"><Icon name="info" size={22} /><p>{connectionCopy.description}</p><button className="inline-action" type="button" onClick={openHelp}>Ver conexão</button></div>
           )}
           {error && <p className="inline-error" role="alert">{error}</p>}
         </section>
@@ -1078,7 +1053,7 @@ function App() {
 
         <div className="chat-bottom">
           <div className="call-dock" aria-label="Controles de voz">
-            <div className="call-status"><span className={`call-status-dot ${media.callActive ? 'call-status-live' : ''}`} /><span>{media.callActive ? `Voz ativa · ${connectedPeerCount} membro(s)` : activeCloudGroup ? `${connectedPeerCount}/${remotePeerCount} conexões P2P · voz desligada` : 'Conecte-se a um grupo para iniciar a chamada'}</span></div>
+            <div className="call-status"><span className={`call-status-dot ${media.callActive ? 'call-status-live' : ''}`} /><span>{media.callActive ? `Voz ativa · ${connectedPeerLabel}` : activeCloudGroup ? `${connectedPeerLabel} · voz desligada` : 'Conecte-se a um grupo para iniciar a chamada'}</span></div>
 
             <div className="call-actions">
               <button
@@ -1106,7 +1081,7 @@ function App() {
                 type="button"
                 className={`call-join ${media.callActive ? 'call-join-leave' : ''}`}
                 disabled={!activeCloudGroup || !meshReady || !media.mediaReady || connectedPeerCount === 0 || media.audioBusy}
-                title={connectedPeerCount === 0 ? 'A chamada exige ao menos um participante conectado' : 'A voz é enviada aos participantes conectados'}
+                title={connectedPeerCount === 0 ? 'A chamada exige ao menos um participante conectado' : 'A voz será compartilhada com os participantes conectados'}
                 onClick={(event) => {
                   if (media.callActive) void media.stopCall();
                   else if (!media.selectedMicrophoneId) openAudioSettings(event);
@@ -1119,10 +1094,10 @@ function App() {
           </div>
 
           <form className="composer" onSubmit={saveMessage}>
-            <label className="sr-only" htmlFor="message-input">Mensagem assinada do grupo</label>
+            <label className="sr-only" htmlFor="message-input">Mensagem para o grupo</label>
             <textarea
               id="message-input"
-              placeholder={activeCloudGroup ? meshReady ? 'Escreva uma mensagem assinada…' : 'Preparando conexão P2P…' : cachedCloudGroup ? 'Histórico offline · somente leitura' : cloudStatus.state === 'ready' ? 'Selecione um grupo privado para conversar…' : 'Conecte-se a um grupo para enviar mensagens…'}
+              placeholder={activeCloudGroup ? meshReady ? 'Escreva uma mensagem…' : 'Preparando a conversa…' : cachedCloudGroup ? 'Histórico sem conexão · somente leitura' : cloudStatus.state === 'ready' ? 'Selecione um grupo privado para conversar…' : 'Conecte-se a um grupo para enviar mensagens…'}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               maxLength={4000}
@@ -1130,9 +1105,9 @@ function App() {
               disabled={!activeCloudGroup || !meshReady || !localCloudUserId || sending}
             />
             <div className="composer-footer">
-              <span className="composer-hint">{activeCloudGroup ? meshReady ? 'Assinada · sincronização P2P' : 'Preparando o grupo' : cachedCloudGroup ? 'Somente leitura' : cloudStatus.state === 'ready' ? 'Selecione um grupo' : 'Envio indisponível'} <span aria-hidden="true">·</span> {draft.length}/4.000</span>
+              <span className="composer-hint">{activeCloudGroup ? meshReady ? 'Salva neste computador' : 'Preparando o grupo' : cachedCloudGroup ? 'Somente leitura' : cloudStatus.state === 'ready' ? 'Selecione um grupo' : 'Envio indisponível'} <span aria-hidden="true">·</span> {draft.length}/4.000</span>
               <button className="send-button" type="submit" disabled={!activeCloudGroup || !meshReady || !localCloudUserId || !draft.trim() || sending}>
-                <span>{sending ? 'Enviando…' : activeCloudGroup ? 'Enviar P2P' : cachedCloudGroup ? 'Somente leitura' : 'Sem grupo'}</span>
+                <span>{sending ? 'Enviando…' : activeCloudGroup ? 'Enviar' : cachedCloudGroup ? 'Somente leitura' : 'Sem grupo'}</span>
                 <Icon name="send" size={15} />
               </button>
             </div>
@@ -1158,8 +1133,8 @@ function App() {
         <section className="group-summary">
           <div className="summary-icon"><Icon name="bubble" size={22} /></div>
           <h3>{activeGroup?.name ?? 'Nenhum grupo selecionado'}</h3>
-          <p>{activeCloudGroup ? 'Grupo privado · conectado' : cachedCloudGroup ? 'Grupo privado · offline e somente leitura' : 'Grupos e mensagens só aparecem após conexão.'}</p>
-          <span className="summary-tag"><Icon name="lock" size={12} />{activeCloudGroup ? 'GRUPO PRIVADO' : cachedCloudGroup ? 'OFFLINE · LEITURA' : 'SEM GRUPO'}</span>
+          <p>{activeCloudGroup ? 'Grupo privado · conectado' : cachedCloudGroup ? 'Grupo privado · sem conexão e somente para leitura' : 'Grupos e mensagens aparecem após a conexão.'}</p>
+          <span className="summary-tag"><Icon name="lock" size={12} />{activeCloudGroup ? 'GRUPO PRIVADO' : cachedCloudGroup ? 'SEM CONEXÃO · LEITURA' : 'SEM GRUPO'}</span>
         </section>
 
 
@@ -1167,18 +1142,15 @@ function App() {
 
         <section className="members-section">
           <div className="section-title"><h3>Membros</h3><span>{displayCloudGroup?.memberCount ?? '—'}</span></div>
-          <p className="section-caption">{activeCloudGroup ? 'Membros autorizados; presença não verificada' : cachedCloudGroup ? 'Metadados salvos; presença indisponível offline' : 'Selecione um grupo disponível.'}</p>
+          <p className="section-caption">{activeCloudGroup ? 'Pessoas com acesso ao grupo' : cachedCloudGroup ? 'Acesso salvo neste computador · somente leitura' : 'Selecione um grupo disponível.'}</p>
           <ul className="member-list">
             {membersLoading && <li className="member-loading">Carregando membros…</li>}
             {visibleMembers.map((member) => {
               const isSelf = member.publicKey === identity?.publicKey
                 || (cloudStatus.state === 'ready' && member.userId === cloudStatus.userId);
-              const fallbackLabel = isSelf ? 'Este computador' : `PC · ${member.userId.slice(-6).toUpperCase()}`;
+              const fallbackLabel = isSelf ? 'Este computador' : `Participante · ${member.userId.slice(-6).toUpperCase()}`;
               const label = member.profile?.displayName || fallbackLabel;
               const roleLabel = member.role === 'owner' ? 'Responsável' : 'Membro';
-              const memberContext = cachedCloudGroup
-                ? `${roleLabel} · offline`
-                : `${roleLabel} · ${isSelf ? 'neste PC' : 'presença não verificada'}`;
               return (
                 <li key={member.userId} className="member-row">
                   <ProfileAvatar
@@ -1186,13 +1158,12 @@ function App() {
                     profile={member.profile}
                     initials={profileInitials(member.profile?.displayName, isSelf ? 'PC' : member.userId.slice(-2).toUpperCase())}
                   />
-                  <span className="member-name"><strong>{label}</strong><span>{memberContext}</span></span>
+                  <span className="member-name"><strong>{label}</strong><span>{roleLabel}</span></span>
                   {activeCloudGroup?.role === 'owner' && !isSelf && (
                     <button className="remove-member" type="button" disabled={Boolean(cloudAction)} aria-label={`Remover ${label}`} title="Remover membro" onClick={() => void removeMember(member)}>
                       <Icon name="close" size={14} />
                     </button>
                   )}
-                  {!cachedCloudGroup && <span className={`member-state ${isSelf ? 'state-local' : ''}`} aria-label={isSelf ? 'Este computador' : 'Presença não verificada'} />}
                 </li>
               );
             })}
@@ -1202,13 +1173,13 @@ function App() {
 
         <section className={`share-card ${media.shareActive ? 'share-card-active' : ''}`}>
           <div className="share-card-icon"><Icon name="screen" size={18} /></div>
-          <div><strong>{media.shareActive ? 'Compartilhando tela' : 'Compartilhar tela'}</strong><span>{media.shareActive ? `${media.shareSourceName} · ${media.screenMode === 'motion' ? 'Movimento' : 'Texto'}` : activeCloudGroup ? meshReady ? 'Escolha uma tela ou janela' : 'Aguardando conexão P2P' : 'Disponível em grupos privados'}</span></div>
+          <div><strong>{media.shareActive ? 'Compartilhando tela' : 'Compartilhar tela'}</strong><span>{media.shareActive ? `${media.shareSourceName} · ${media.screenMode === 'motion' ? 'Fluidez' : 'Nitidez'}` : activeCloudGroup ? meshReady ? 'Escolha uma tela ou janela' : 'Aguardando participantes' : 'Disponível em grupos privados'}</span></div>
           <button type="button" disabled={!media.shareActive && (!activeCloudGroup || !meshReady || !media.mediaReady)} aria-label={media.shareActive ? 'Parar compartilhamento de tela' : 'Selecionar tela para compartilhar'} title={media.shareActive ? 'Parar transmissão e liberar a captura' : 'Selecionar explicitamente uma tela ou janela'} onClick={(event) => media.shareActive ? void media.stopScreenShare() : openScreenSettings(event)}>
             <Icon name={media.shareActive ? 'close' : 'chevron'} size={16} />
           </button>
         </section>
 
-        <div className="privacy-note"><Icon name="lock" size={14} /><p>{activeCloudGroup ? 'O Supabase armazena metadados do grupo. Mensagens assinadas permanecem nos PCs.' : cachedCloudGroup ? 'Grupo, membros e mensagens assinadas salvos neste PC; somente leitura offline.' : 'Conecte-se a um grupo para acessar mensagens e membros.'}</p></div>
+        <div className="privacy-note"><Icon name="lock" size={14} /><p>{activeCloudGroup ? 'O histórico de mensagens permanece neste computador.' : cachedCloudGroup ? 'Grupo, membros e mensagens salvos neste computador; somente leitura.' : 'Conecte-se a um grupo para acessar mensagens e participantes.'}</p></div>
 
       </aside>
 
@@ -1219,30 +1190,27 @@ function App() {
             {dialogMode === 'connection' ? (
               <>
                 <div className="dialog-mark"><Icon name="lock" size={21} /></div>
-                <h2 id="connection-dialog-title">Estado da conexão</h2>
-                <p id="connection-dialog-description">{cloudStatus.detail}</p>
+                <h2 id="connection-dialog-title">{connectionCopy.label}</h2>
+                <p id="connection-dialog-description">{connectionCopy.description}</p>
                 <div className="dialog-checklist">
-                  <div><span className={identity ? 'check-ready' : 'check-empty'} /><span>Identidade Ed25519 protegida pelo Windows</span><strong>{identity ? 'Disponível' : 'Indisponível'}</strong></div>
-                  <div><span className={cloudStatus.state === 'ready' ? 'check-ready' : 'check-empty'} /><span>Supabase Auth e grupos privados</span><strong>{cloudStatus.state === 'ready' ? 'Disponível' : cloudStatus.state === 'not-configured' ? 'Não configurado' : cloudStatus.state === 'connecting' ? 'Verificando' : 'Indisponível'}</strong></div>
-                  <div><span className={connectedPeerCount ? 'check-ready' : 'check-empty'} /><span>Chat e mídia P2P</span><strong>{!activeCloudGroup ? cloudStatus.state === 'ready' ? 'Sem grupo ativo' : 'Não configurado' : connectedPeerCount ? `${connectedPeerCount} conectado(s)` : meshReady ? 'Aguardando participantes' : 'Preparando'}</strong></div>
-                  <div><span className={activeCloudGroup && turnStatus === 'available' ? 'check-ready' : 'check-empty'} /><span>TURN gratuito · fallback direto</span><strong>{!activeCloudGroup ? cloudStatus.state === 'ready' ? 'Sem grupo ativo' : 'Não configurado' : turnStatus === 'checking' ? 'Consultando' : turnStatus === 'available' ? 'Credenciais disponíveis' : 'Sem credenciais'}</strong></div>
+                  <div><span className={identity ? 'check-ready' : 'check-empty'} /><span>Identidade deste computador</span><strong>{identity ? 'Pronta' : 'Indisponível'}</strong></div>
+                  <div><span className={cloudStatus.state === 'ready' ? 'check-ready' : 'check-empty'} /><span>Acesso aos grupos</span><strong>{connectionCopy.label}</strong></div>
+                  <div><span className={connectedPeerCount ? 'check-ready' : 'check-empty'} /><span>Participantes conectados</span><strong>{connectedPeerCount ? connectedPeerLabel : activeCloudGroup ? meshReady ? 'Ninguém conectado' : 'Verificando' : cachedCloudGroup ? 'Histórico somente para leitura' : 'Sem grupo ativo'}</strong></div>
                 </div>
-                {cloudStatus.state === 'not-configured' && (
-                  <p className="config-hint">Configure <code>supabaseUrl</code> e <code>supabaseAnonKey</code> no arquivo <code>config.json</code> da pasta de dados do Larp. Nunca use uma chave service-role.</p>
-                )}
+                
                 {cloudError && <p className="dialog-error" role="alert">{cloudError}</p>}
                 <div className="dialog-actions">
                   <button className="dialog-secondary" type="button" disabled={cloudAction === 'refresh'} onClick={() => void refreshCloudStatus()}>
                     {cloudAction === 'refresh' ? 'Verificando…' : 'Atualizar conexão'}
                   </button>
-                  <button className="dialog-secondary" type="button" disabled={!activeCloudGroup || !meshReady || turnStatus === 'checking'} onClick={retryTurn}>Tentar TURN novamente</button>
+                  <button className="dialog-secondary" type="button" disabled={!activeCloudGroup || !meshReady || turnStatus === 'checking'} onClick={retryTurn}>Tentar conexão novamente</button>
                   <button className="dialog-done" type="button" onClick={closeHelp}>Fechar</button>
                 </div>
               </>
             ) : dialogMode === 'groups' ? (
               <>
                 <h2 id="connection-dialog-title">Grupos privados</h2>
-                <p id="connection-dialog-description">{cloudStatus.state === 'ready' ? 'Crie um grupo ou entre com um código de convite de uso único.' : cloudStatus.detail}</p>
+                <p id="connection-dialog-description">{cloudStatus.state === 'ready' ? 'Crie um grupo ou entre com um código de convite de uso único.' : connectionCopy.description}</p>
                 <div className="group-manager-forms">
                   <form onSubmit={createCloudGroup}>
                     <label htmlFor="new-group-name">Criar grupo</label>
@@ -1303,7 +1271,7 @@ function App() {
             ) : dialogMode === 'profile' ? (
               <form className="profile-form" onSubmit={(event) => void saveProfile(event)}>
                 <h2 id="connection-dialog-title">Editar perfil</h2>
-                <p id="connection-dialog-description">Nome e foto aparecem para membros dos seus grupos privados em comum. Mensagens assinadas permanecem inalteradas.</p>
+                <p id="connection-dialog-description">Seu nome e sua foto aparecem apenas para pessoas dos seus grupos em comum.</p>
                 {profileLoading && <p className="profile-hint" role="status">Carregando seu perfil…</p>}
                 <label htmlFor="profile-display-name">Nome de exibição</label>
                 <input
@@ -1319,7 +1287,7 @@ function App() {
                   aria-describedby="profile-name-hint"
                 />
                 <p className="profile-hint" id="profile-name-hint">
-                  Até {USER_PROFILE_NAME_MAX_LENGTH} caracteres. Vazio restaura seu identificador de PC.
+                  Até {USER_PROFILE_NAME_MAX_LENGTH} caracteres. Vazio restaura seu nome padrão.
                 </p>
                 <label htmlFor="profile-avatar-file">Foto de perfil</label>
                 <div className="profile-photo-control">
@@ -1347,7 +1315,7 @@ function App() {
                     </button>
                   </div>
                 </div>
-                <p className="profile-hint">A imagem será cortada em quadrado e convertida para WebP 128 × 128, até 48 KiB.</p>
+                <p className="profile-hint">A imagem será ajustada para aparecer bem no perfil.</p>
                 {profileError && <p className="dialog-error" role="alert">{profileError}</p>}
                 {profileNotice && <p className="dialog-success" role="status">{profileNotice}</p>}
                 <div className="dialog-actions profile-actions">
@@ -1355,7 +1323,7 @@ function App() {
                     className="dialog-secondary"
                     type="button"
                     disabled={profileLoading || profilePhotoBusy || profileSaving}
-                    onClick={() => { setProfileName(''); setProfileAvatarData(null); setProfileNotice('Perfil limpo. Salve para restaurar o identificador de PC.'); }}
+                    onClick={() => { setProfileName(''); setProfileAvatarData(null); setProfileNotice('Perfil limpo. Salve para restaurar o nome padrão.'); }}
                   >
                     Limpar perfil
                   </button>
@@ -1383,7 +1351,7 @@ function App() {
                     <button className="dialog-secondary" type="button" disabled={media.audioBusy || !media.selectedMicrophoneId} onClick={() => void media.testMicrophone()}>{media.microphoneTestActive ? 'Parar teste' : 'Testar microfone'}</button>
                   </div>
                   <div className="microphone-meter" role="meter" aria-label="Nível do microfone" aria-valuemin={0} aria-valuemax={100} aria-valuenow={media.microphoneLevel}>
-                    <span style={{ width: `${media.microphoneLevel}%` }} />
+                    <span style={{ transform: `scaleX(${media.microphoneLevel / 100})` }} />
                   </div>
                   <label htmlFor="output-device">Saída de áudio</label>
                   <select id="output-device" value={media.selectedOutputId} disabled={media.audioBusy} onChange={(event) => void media.selectAudioOutput(event.target.value)}>
@@ -1399,7 +1367,7 @@ function App() {
             ) : (
               <>
                 <h2 id="connection-dialog-title">Compartilhar tela</h2>
-                <p id="connection-dialog-description">Selecione explicitamente uma tela ou janela. O áudio do sistema começa desativado e a transmissão pode usar TURN se houver credenciais gratuitas.</p>
+                <p id="connection-dialog-description">Escolha uma tela ou janela. O áudio do sistema começa desativado e só será incluído se você permitir.</p>
                 <div className="media-form">
                   <div className="source-heading">
                     <strong>Fonte de captura</strong>
@@ -1416,12 +1384,12 @@ function App() {
                   </div>
                   <fieldset className="mode-options">
                     <legend>Prioridade de qualidade</legend>
-                    <label><input type="radio" name="screen-mode" checked={media.screenMode === 'motion'} onChange={() => media.setScreenMode('motion')} /><span><strong>Movimento</strong><small>Até 60 FPS; adapta a resolução conforme rede e codificador.</small></span></label>
-                    <label><input type="radio" name="screen-mode" checked={media.screenMode === 'text'} onChange={() => media.setScreenMode('text')} /><span><strong>Texto</strong><small>Prioriza resolução e legibilidade; até 30 FPS.</small></span></label>
+                    <label><input type="radio" name="screen-mode" checked={media.screenMode === 'motion'} onChange={() => media.setScreenMode('motion')} /><span><strong>Fluidez</strong><small>Prioriza movimentos suaves e adapta a qualidade à conexão.</small></span></label>
+                    <label><input type="radio" name="screen-mode" checked={media.screenMode === 'text'} onChange={() => media.setScreenMode('text')} /><span><strong>Nitidez</strong><small>Prioriza texto legível e adapta a qualidade à conexão.</small></span></label>
                   </fieldset>
-                  <label className="system-audio-option"><input type="checkbox" checked={media.includeSystemAudio} onChange={(event) => media.setIncludeSystemAudio(event.target.checked)} /><span>Incluir áudio do sistema <small>Desativado por padrão; requer suporte do Windows e do Electron.</small></span></label>
-                  <label className="budget-label" htmlFor="video-budget">Orçamento total de vídeo: <strong>{media.videoBudgetMbps} Mb/s</strong></label>
-                  <input id="video-budget" className="budget-slider" type="range" min={1} max={20} step={1} value={media.videoBudgetMbps} onChange={(event) => media.setVideoBudgetMbps(Number(event.target.value))} />
+                  <label className="system-audio-option"><input type="checkbox" checked={media.includeSystemAudio} onChange={(event) => media.setIncludeSystemAudio(event.target.checked)} /><span>Incluir áudio do sistema <small>Desativado por padrão; depende das permissões deste computador.</small></span></label>
+                  <label className="budget-label" htmlFor="video-budget">Ajuste de qualidade da transmissão</label>
+                  <input id="video-budget" className="budget-slider" type="range" min={1} max={20} step={1} value={media.videoBudgetMbps} onChange={(event) => media.setVideoBudgetMbps(Number(event.target.value))} aria-label="Qualidade máxima da transmissão" />
                 </div>
                 {media.shareError && <p className="dialog-error" role="alert">{media.shareError}</p>}
                 <div className="dialog-actions">

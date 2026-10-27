@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SelectedDisplaySource } from '../../shared/contracts';
-import { MediaQualityController, type PeerMediaStats, type VideoContentPreference } from './quality';
+import { MediaQualityController, type VideoContentPreference } from './quality';
 import { MediaSession, type MediaDeviceOption } from './session';
 import type { PeerMesh } from '../rtc/peer-mesh';
 
@@ -30,7 +30,6 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   const [shareActive, setShareActive] = useState(false);
   const [shareSourceName, setShareSourceName] = useState('');
   const [shareError, setShareError] = useState('');
-  const [shareStats, setShareStats] = useState<PeerMediaStats[]>([]);
   const [shareStarting, setShareStarting] = useState(false);
   const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
@@ -58,7 +57,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     try {
       await window.larp.releaseScreenShare(leaseGroupId);
     } catch {
-      setShareError('A reserva da tela será liberada quando expirar; a conexão com a sinalização está indisponível.');
+      setShareError('Não foi possível finalizar o compartilhamento agora. A liberação será automática.');
     }
   }, []);
 
@@ -93,7 +92,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       displaySourceProvider: {
         listSources: () => window.larp.listDisplaySources(),
         capture: async (source, options) => {
-          if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Captura de tela não é suportada nesta versão do Electron.');
+          if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('O compartilhamento de tela não está disponível neste computador.');
           await window.larp.prepareDisplayCapture(source.id, options.audio);
           return navigator.mediaDevices.getDisplayMedia({
             video: { frameRate: { ideal: 60, max: 60 } },
@@ -114,9 +113,9 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     if (audioElementRef.current) session.attachOutput(audioElementRef.current);
     setMediaReady(true);
     setAudioError('');
-    const removeDeviceListener = session.onDeviceRemovedEvent(({ kind, deviceId }) => {
+    const removeDeviceListener = session.onDeviceRemovedEvent(({ kind }) => {
       setAudioError(kind === 'audioinput'
-        ? `O microfone ${deviceId.slice(0, 8)} foi desconectado. A chamada foi interrompida.`
+        ? 'O microfone foi desconectado. A chamada foi interrompida.'
         : 'A saída de áudio selecionada foi removida. O áudio usará a saída padrão.');
       if (kind === 'audioinput') {
         microphoneStreamRef.current = null;
@@ -175,7 +174,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     if (!audio) return;
     const stream = remoteAudioStreamRef.current;
     audio.srcObject = stream;
-    if (stream) void audio.play().catch(() => setAudioError('O áudio remoto está pronto. Clique em “Saída de áudio” para liberá-lo.'));
+    if (stream) void audio.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
   }, [remoteVideoStream, mediaReady]);
 
   const onRemoteTrack = useCallback((track: MediaStreamTrack) => {
@@ -185,7 +184,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       if (!stream.getTracks().includes(track)) stream.addTrack(track);
       if (audioElementRef.current) {
         audioElementRef.current.srcObject = stream;
-        void audioElementRef.current.play().catch(() => setAudioError('O áudio remoto está pronto. Clique em “Saída de áudio” para liberá-lo.'));
+        void audioElementRef.current.play().catch(() => setAudioError('Permita a saída de áudio para ouvir a chamada.'));
       }
       track.addEventListener('ended', () => {
         stream.removeTrack(track);
@@ -251,8 +250,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     let current = true;
     for (const peerId of connectedPeerIds) {
       for (const stream of streams) {
-        void attachStreamToPeer(peerId, stream).catch((cause: unknown) => {
-          if (current) setAudioError(cause instanceof Error ? cause.message : 'Não foi possível adicionar a mídia ao participante.');
+        void attachStreamToPeer(peerId, stream).catch(() => {
+          if (current) setAudioError('Não foi possível compartilhar o áudio com o participante.');
         });
       }
     }
@@ -269,10 +268,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   }, [videoBudgetMbps]);
 
   useEffect(() => {
-    if (!shareActive || !mesh) {
-      setShareStats([]);
-      return;
-    }
+    if (!shareActive || !mesh) return;
     let current = true;
     let busy = false;
     const controller = qualityControllerRef.current;
@@ -308,7 +304,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
           };
         }));
         await controller.allocate(qualityPeers);
-        if (current) setShareStats(mediaStats);
+        
       } finally {
         busy = false;
       }
@@ -332,13 +328,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
         .then(async (held) => {
           if (!current) return;
           if (!held) {
-            setShareError('A reserva da tela foi perdida para outro participante.');
+            setShareError('O compartilhamento de tela foi interrompido.');
             await stopScreenShare();
           }
         })
         .catch(async () => {
           if (!current) return;
-          setShareError('Não foi possível renovar a reserva da tela. A transmissão foi encerrada.');
+          setShareError('Não foi possível manter o compartilhamento. A transmissão foi encerrada.');
           await stopScreenShare();
         })
         .finally(() => { renewing = false; });
@@ -369,13 +365,13 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
         if (permission.state !== 'active') {
           setAudioError(permission.state === 'permission-denied'
             ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
-            : permission.error ?? 'Nenhum microfone compatível foi encontrado.');
+            : 'O microfone não está disponível neste computador.');
           return;
         }
       }
       const [inputs, outputs] = await Promise.all([session.enumerateDevices('audioinput'), session.enumerateDevices('audiooutput')]);
       if (inputs.state !== 'available') {
-        setAudioError(inputs.state === 'permission-denied' ? 'Permissão do microfone negada.' : inputs.error ?? 'Não foi possível listar microfones.');
+        setAudioError(inputs.state === 'permission-denied' ? 'A permissão do microfone foi negada.' : 'Não foi possível listar microfones.');
         return;
       }
       const devices = [...inputs.devices, ...(outputs.state === 'available' ? outputs.devices : [])];
@@ -383,8 +379,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       setSelectedMicrophoneId((current) => inputs.devices.some((device) => device.deviceId === current) ? current : inputs.devices[0]?.deviceId ?? '');
       setSelectedOutputId((current) => outputs.devices.some((device) => device.deviceId === current) ? current : outputs.devices[0]?.deviceId ?? '');
       if (inputs.devices.length === 0) setAudioError('Nenhum microfone disponível. Conecte um dispositivo e atualize a lista.');
-    } catch (cause) {
-      setAudioError(cause instanceof Error ? cause.message : 'Não foi possível listar os dispositivos de áudio.');
+    } catch {
+      setAudioError('Não foi possível listar os dispositivos de áudio.');
     } finally {
       setAudioBusy(false);
     }
@@ -409,7 +405,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       setSelectedOutputId(deviceId);
       setAudioError('');
     } else {
-      setAudioError(state === 'permission-denied' ? 'A seleção da saída foi negada pelo Windows.' : 'Esta versão do Electron não permite selecionar essa saída de áudio.');
+      setAudioError(state === 'permission-denied' ? 'A permissão para selecionar esta saída foi negada.' : 'Não foi possível selecionar essa saída de áudio.');
     }
   }, []);
 
@@ -446,14 +442,24 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     try {
       if (!microphoneStreamRef.current?.getAudioTracks().some((track) => track.readyState === 'live')) {
         const capture = await session.selectMicrophone(selectedMicrophoneId);
-        if (capture.state !== 'active' || !capture.stream) throw new Error(capture.error ?? 'Não foi possível iniciar o microfone.');
+        if (capture.state !== 'active' || !capture.stream) {
+          setAudioError(capture.state === 'permission-denied'
+            ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
+            : capture.state === 'unsupported'
+              ? 'O microfone não está disponível neste computador.'
+              : 'Não foi possível iniciar o microfone.');
+          return;
+        }
         microphoneStreamRef.current = capture.stream;
       }
-      if (!await session.startMicrophoneTest()) throw new Error('O teste do microfone não pôde ser iniciado.');
+      if (!await session.startMicrophoneTest()) {
+        setAudioError('Não foi possível testar o microfone.');
+        return;
+      }
       setMicrophoneTestActive(true);
       microphoneTestTimerRef.current = setTimeout(() => { void stopMicrophoneTest(); }, 5_000);
-    } catch (cause) {
-      setAudioError(cause instanceof Error ? cause.message : 'Não foi possível testar o microfone.');
+    } catch {
+      setAudioError('Não foi possível testar o microfone.');
     } finally {
       setAudioBusy(false);
     }
@@ -475,7 +481,14 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       let stream = microphoneStreamRef.current;
       if (!stream?.getAudioTracks().some((track) => track.readyState === 'live')) {
         const capture = await session.selectMicrophone(selectedMicrophoneId);
-        if (capture.state !== 'active' || !capture.stream) throw new Error(capture.error ?? 'Não foi possível iniciar o microfone.');
+        if (capture.state !== 'active' || !capture.stream) {
+          setAudioError(capture.state === 'permission-denied'
+            ? 'A permissão do microfone foi negada nas permissões do Windows ou do Larp.'
+            : capture.state === 'unsupported'
+              ? 'O microfone não está disponível neste computador.'
+              : 'Não foi possível iniciar o microfone.');
+          return false;
+        }
         stream = capture.stream;
         microphoneStreamRef.current = stream;
       }
@@ -483,8 +496,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       for (const peerId of connectedPeerIds) await attachStreamToPeer(peerId, stream);
       setCallActive(true);
       return true;
-    } catch (cause) {
-      setAudioError(cause instanceof Error ? cause.message : 'Não foi possível entrar na chamada.');
+    } catch {
+      setAudioError('Não foi possível entrar na chamada.');
       return false;
     } finally {
       setAudioBusy(false);
@@ -517,7 +530,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
   const refreshDisplaySources = useCallback(async () => {
     const result = await sessionRef.current?.listDisplaySources();
     if (!result || result.state !== 'available') {
-      setShareError(result?.error ?? 'A lista de telas e janelas não está disponível.');
+      setShareError('Não foi possível listar as telas e janelas disponíveis.');
       setDisplaySources([]);
       return [];
     }
@@ -539,10 +552,22 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     setShareError('');
     try {
       const reserved = await window.larp.acquireScreenShare(groupId);
-      if (!reserved) throw new Error('Outra pessoa já está compartilhando a tela deste grupo.');
+      if (!reserved) {
+        setShareError('Outra pessoa já está compartilhando a tela deste grupo.');
+        return false;
+      }
       shareGroupIdRef.current = groupId;
       const capture = await session.startDisplayShare(source, { audio: includeSystemAudio });
-      if (capture.state !== 'active' || !capture.stream) throw new Error(capture.error ?? 'Não foi possível capturar a fonte selecionada.');
+      if (capture.state !== 'active' || !capture.stream) {
+        setShareError(capture.state === 'permission-denied'
+          ? 'A permissão para compartilhar a tela foi negada. Verifique as permissões deste computador.'
+          : capture.state === 'unsupported'
+            ? 'O compartilhamento de tela não está disponível neste computador.'
+            : 'Não foi possível capturar a tela escolhida.');
+        await session.stopDisplayShare();
+        await releaseShareLease(groupId);
+        return false;
+      }
       for (const track of capture.stream.getVideoTracks()) track.contentHint = screenMode === 'text' ? 'text' : 'motion';
       for (const peerId of mesh.connectedPeerIds) await attachStreamToPeer(peerId, capture.stream);
       displayStreamRef.current = capture.stream;
@@ -550,8 +575,8 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
       setShareSourceName(source.name);
       setShareActive(true);
       return true;
-    } catch (cause) {
-      setShareError(cause instanceof Error ? cause.message : 'Não foi possível iniciar o compartilhamento.');
+    } catch {
+      setShareError('Não foi possível iniciar o compartilhamento. Verifique as permissões e tente novamente.');
       await session.stopDisplayShare();
       await releaseShareLease(groupId);
       return false;
@@ -597,7 +622,6 @@ export function useMediaController({ groupId, mesh, connectedPeerIds }: MediaCon
     shareActive,
     shareSourceName,
     shareError,
-    shareStats,
     displayStream,
     shareStarting,
     remoteVideoStream,

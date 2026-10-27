@@ -1,3 +1,20 @@
+@font-face {
+  font-family: 'Dongle';
+  src: url('./assets/fonts/Dongle-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Dongle';
+  src: url('./assets/fonts/Dongle-Bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+
 :root {
   --steam: #dddcde;
   --valentine-heart: #be779e;
@@ -18,4 +35,14 @@
   --accent: var(--valentine-heart);
   --danger: var(--valentine-heart);
   --alert: var(--valentine-heart);
+  --font-interface: 'Dongle', 'Segoe UI', sans-serif;
+  --type-body: 16px;
+  --type-control: 14px;
+  --type-support: 13px;
+  --type-meta: 12px;
+  --type-section: 18px;
+  --type-title: 22px;
+  --leading-body: 1.3;
+  --leading-message: 1.4;
+  --leading-title: 1.1;
 }

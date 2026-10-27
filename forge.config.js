@@ -1,11 +1,12 @@
 const path = require('node:path');
 const appIcon = path.resolve(__dirname, 'src/assets/larp-icon.ico');
+const fontLicense = path.resolve(__dirname, 'src/assets/fonts/OFL.txt');
 
 module.exports = {
   packagerConfig: {
     icon: appIcon,
     asar: { unpack: '**/*.node', unpackDir: 'node_modules/better-sqlite3' },
-    extraResource: ['default-cloud-config.json', appIcon],
+    extraResource: ['default-cloud-config.json', appIcon, fontLicense],
     ignore: (file) => {
       if (!file) return false;
       const isViteOutput = file === '/.vite' || file.startsWith('/.vite/');

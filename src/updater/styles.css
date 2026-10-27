@@ -1,7 +1,10 @@
 @import '../theme.css';
 :root {
   color-scheme: dark;
-  font-family: Inter, 'Segoe UI', sans-serif;
+  font-family: var(--font-interface);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+  font-weight: 400;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -34,15 +37,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 }
 .brand-logo { display: block; width: 78px; height: 28px; object-fit: contain; object-position: left center; }
 .update-content { flex: 1; padding-top: 22px; }
-h1 { margin: 0; color: var(--text); font-size: 17px; font-weight: 680; line-height: 1.35; }
-p { min-height: 39px; margin: 7px 0 0; color: var(--text); font-size: 12px; line-height: 1.55; }
+h1 { margin: 0; color: var(--text); font-size: var(--type-title); font-weight: 700; line-height: var(--leading-title); }
+p { min-height: 39px; margin: 7px 0 0; color: var(--text); font-size: var(--type-control); font-weight: 400; line-height: var(--leading-body); }
 .progress-track {
   position: relative;
   height: 4px;
   margin-top: 12px;
   overflow: hidden;
   background: var(--panel-raised);
-  border-radius: 999px;
+  border-radius: 4px;
 }
 .progress-indicator {
   position: absolute;
@@ -60,8 +63,8 @@ p { min-height: 39px; margin: 7px 0 0; color: var(--text); font-size: 12px; line
   border: 1px solid var(--border);
   border-radius: 5px;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--type-control);
+  font-weight: 700;
   transition: background-color 120ms ease, border-color 120ms ease;
   -webkit-app-region: no-drag;
 }
@@ -69,7 +72,7 @@ p { min-height: 39px; margin: 7px 0 0; color: var(--text); font-size: 12px; line
 .button.primary:hover { border-color: var(--text); }
 .button.secondary { color: var(--text); background: var(--panel-raised); }
 .button.secondary:hover { background: var(--panel-soft); border-color: var(--accent); }
-.version-label { margin-top: 10px; color: var(--muted); font-size: 10px; }
+.version-label { margin-top: 10px; color: var(--muted); font-size: var(--type-meta); line-height: var(--leading-title); }
 
 @keyframes loading {
   from { transform: translateX(-115%); }

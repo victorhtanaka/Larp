@@ -22,66 +22,70 @@ colors:
   alert: "#be779e"
 typography:
   display:
-    fontFamily: "Georgia, serif"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
     fontSize: "22px"
     fontWeight: 700
-    lineHeight: 1
+    lineHeight: 1.1
   headline:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "18px"
-    fontWeight: 680
-    letterSpacing: "-0.25px"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "22px"
+    fontWeight: 700
+    lineHeight: 1.1
   title:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "16px"
-    fontWeight: 660
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "18px"
+    fontWeight: 700
+    lineHeight: 1.1
   body:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "16px"
+    fontWeight: 400
+    lineHeight: 1.3
+  message:
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "16px"
+    fontWeight: 400
+    lineHeight: 1.4
+  button:
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.1
+  call:
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.1
+  confirm:
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.1
+  control:
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
     fontSize: "14px"
     fontWeight: 400
-  message:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "12px"
-    fontWeight: 400
-    lineHeight: 1.6
-  button:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "9px"
-    fontWeight: 750
-  call:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "9px"
-    fontWeight: 700
-  confirm:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "11px"
-    fontWeight: 720
-  control:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "10px"
-    fontWeight: 650
+    lineHeight: 1.3
   group-name:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "11px"
-    fontWeight: 650
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.1
   input:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "11px"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
     fontWeight: 400
-    lineHeight: 1.55
+    lineHeight: 1.3
   chip:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "8px"
-    fontWeight: 750
-    letterSpacing: ".06em"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "12px"
+    fontWeight: 700
+    lineHeight: 1.1
   label:
-    fontFamily: "Inter, 'Segoe UI', sans-serif"
-    fontSize: "10px"
-    fontWeight: 750
-    letterSpacing: ".105em"
-  mono:
-    fontFamily: "Consolas, 'Courier New', monospace"
-    fontSize: "9px"
+    fontFamily: "Dongle, 'Segoe UI', sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.1
 rounded:
   xs: "4px"
   sm: "5px"
@@ -190,20 +194,17 @@ Use Existential Angst text on Valentine Heart actions; Steam text remains on Dar
 
 ## Typography
 
-**Display Font:** Georgia, serif (brand mark only)
-**Body Font:** Inter, 'Segoe UI', sans-serif
-**Label/Mono Font:** Consolas, 'Courier New', monospace (configuration values only)
+**Interface family:** Dongle Regular and Bold are bundled locally with their SIL Open Font License 1.1 notice; Segoe UI and sans-serif are fallbacks.
 
-**Character:** A compact, neutral sans keeps dense group and connection states scannable. The Georgia lettermark is a small brand signature; interface headings remain in the same sans family as the body.
+**Character:** Dongle is used across both the main window and updater, with one readable scale for conversation, settings and supporting details.
 
 ### Hierarchy
-- **Display** (700, 22px, line-height 1): the single initial inside the brand mark.
-- **Headline** (680, 18px): the selected group name in the conversation header.
-- **Title** (660, 16px): the group-details heading; 13px/670 identifies the group in its summary.
-- **Body** (400, 14px): the base interface size. Message copy is 12px with 1.6 line-height.
-- **Buttons and controls** (750 at 9px for send, 700 at 9px for call, 720 at 11px for confirmation, 650 at 10px for secondary): keep each role's measured weight.
-- **Label / chip** (10px/750 with .105em tracking; 8px/750 with .06em tracking): section labels and privacy tags.
-- **Technical** (Consolas, 9px): configuration and code values only.
+- **Headline** (700, 22px, line-height 1.1): conversation and dialog titles.
+- **Section** (700, 18px, line-height 1.1): group details and section headings.
+- **Body and messages** (400, 16px): body line-height 1.3; message line-height 1.4.
+- **Controls and labels** (14px): regular-weight inputs, bold buttons and labels.
+- **Supporting copy** (400, 13px): contextual descriptions and hints.
+- **Metadata** (12px): timestamps, chips and compact state labels.
 
 ### Named Rules
 **The Group Name Leads Rule.** The selected group title is the single headline; membership and connection details remain secondary.
