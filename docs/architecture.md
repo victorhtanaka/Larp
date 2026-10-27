@@ -30,7 +30,7 @@ As migrações em ordem definem políticas RLS, funções transacionais e índic
 
 ## Perfis compartilhados
 
-`public.larp_user_profiles` armazena um nome opcional e uma URI de dados WebP por usuário autenticado. `private.can_view_profile` permite leitura apenas pelo dono e por membros autenticados que compartilham um grupo privado com ele. As políticas de inserção e atualização vinculam `user_id` a `auth.uid()`; privilégios por coluna impedem alterar o dono. RLS está ativada e forçada; `anon` não recebe privilégios na tabela.
+`public.larp_user_profiles` armazena um nome opcional e uma URI de dados WebP por usuário autenticado. `private.can_view_profile` permite leitura apenas pelo dono e por membros autenticados que compartilham um grupo privado com ele. As políticas de inserção e atualização vinculam `user_id` a `auth.uid()`; privilégios por coluna impedem alterar o dono. RLS está ativada e forçada; `anon` não recebe privilégios na tabela. O cliente insere o perfil e, em conflito de chave, atualiza somente `display_name` e `avatar_data`: o `upsert` do PostgREST também atualizaria `user_id`, que não deve receber privilégio UPDATE.
 
 O renderer envia somente `displayName` e `avatarData`; o IPC deriva o ID do usuário a partir da sessão autenticada. Nomes são aparados e limitados a 32 caracteres Unicode. O seletor aceita imagens de origem até 8 MiB e armazena uma miniatura WebP centralizada de 128 × 128, até 48 KiB. Limpar os dois campos restaura o pseudônimo do PC. Perfis apenas decoram as visualizações atuais de membros e mensagens; envelopes assinados e histórico local permanecem inalterados.
 

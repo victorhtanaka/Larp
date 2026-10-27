@@ -1,12 +1,13 @@
 begin;
 
-select plan(14);
+select plan(15);
 
 insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at)
 values
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'profile-owner@larp.invalid', '', now(), now(), now()),
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'profile-member@larp.invalid', '', now(), now(), now()),
-  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'profile-outsider@larp.invalid', '', now(), now(), now());
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'profile-outsider@larp.invalid', '', now(), now(), now()),
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'profile-new@larp.invalid', '', now(), now(), now());
 
 insert into public.larp_groups (id, name)
 values ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', 'Profile policy test');
@@ -46,5 +47,10 @@ update public.larp_user_profiles set display_name = 'Member updated'
 where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
 select is((select display_name from public.larp_user_profiles where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'), 'Member updated', 'a user can update their own profile');
 
+set local "request.jwt.claim.sub" = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4';
+set local "request.jwt.claims" = '{"sub":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4","role":"authenticated"}';
+insert into public.larp_user_profiles (user_id, display_name, avatar_data)
+values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4', 'New profile', null);
+select is((select display_name from public.larp_user_profiles where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4'), 'New profile', 'a user can insert their own profile');
 select * from finish();
 rollback;

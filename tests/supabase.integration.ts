@@ -117,13 +117,13 @@ async function scenario(url: string, key: string): Promise<void> {
   await tableRead(outsider, 'larp_group_members', groupId);
   await expectFailure(() => rpc(outsider, 'list_group_members', { p_group_id: groupId }), 'membership required', 'Nonmember must be denied member listing.');
   const ownerProfile = await owner.client.from('larp_user_profiles')
-    .upsert({ user_id: owner.userId, display_name: 'Dono do grupo', avatar_data: null }, { onConflict: 'user_id' })
+    .insert({ user_id: owner.userId, display_name: 'Dono do grupo', avatar_data: null })
     .select('user_id, display_name')
     .single();
   assert.ifError(ownerProfile.error);
   assert.equal(ownerProfile.data?.display_name, 'Dono do grupo');
   const memberProfile = await member.client.from('larp_user_profiles')
-    .upsert({ user_id: member.userId, display_name: 'Membro do grupo', avatar_data: null }, { onConflict: 'user_id' })
+    .insert({ user_id: member.userId, display_name: 'Membro do grupo', avatar_data: null })
     .select('user_id, display_name')
     .single();
   assert.ifError(memberProfile.error);

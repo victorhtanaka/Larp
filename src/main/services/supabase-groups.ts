@@ -419,9 +419,19 @@ export class SupabaseGroupsService {
     const userId = this.signedInUserId;
     if (!userId) throw new Error('The authenticated cloud user is unavailable.');
     const fields = normalizeProfileFields(profile.displayName, profile.avatarData);
+    // PostgREST upsert updates every payload column on conflict; user_id is deliberately not UPDATE-granted.
+    const { data: inserted, error: insertError } = await this.client
+      .from('larp_user_profiles')
+      .insert({ user_id: userId, display_name: fields.displayName, avatar_data: fields.avatarData })
+      .select('user_id, display_name, avatar_data')
+      .single();
+    if (!insertError) return profileRowFrom(inserted, userId);
+    if (insertError.code !== '23505') throw new Error(`Could not save user profile: ${insertError.message}`);
+
     const { data, error } = await this.client
       .from('larp_user_profiles')
-      .upsert({ user_id: userId, display_name: fields.displayName, avatar_data: fields.avatarData }, { onConflict: 'user_id' })
+      .update({ display_name: fields.displayName, avatar_data: fields.avatarData })
+      .eq('user_id', userId)
       .select('user_id, display_name, avatar_data')
       .single();
     if (error) throw new Error(`Could not save user profile: ${error.message}`);
