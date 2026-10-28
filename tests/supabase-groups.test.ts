@@ -199,3 +199,81 @@ test('presence snapshots aggregate sessions and filter untrusted or non-member e
   });
   assert.deepEqual(groupPresenceFromSnapshot(null, new Set([memberId])), {});
 });
+
+test('routes signed media-state envelopes only to group members', async () => {
+  const userId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+  const peerId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+  const outsiderId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3';
+  const groupId = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd4';
+  const delivered: unknown[] = [];
+  const sent: unknown[] = [];
+  const broadcastCallbacks: Array<(event: { payload: unknown }) => void> = [];
+  const channel = {
+    on: (type: string, filter: { event?: string }, callback: (event: { payload: unknown }) => void) => {
+      if (type === 'broadcast' && filter.event === 'signal') broadcastCallbacks.push(callback);
+      return channel;
+    },
+    subscribe: (listener: (status: string) => void) => {
+      listener('SUBSCRIBED');
+      return channel;
+    },
+    send: async (message: unknown) => {
+      sent.push(message);
+      return 'ok';
+    },
+    presenceState: () => ({}),
+  };
+  const members = [userId, peerId].map((memberId) => ({
+    user_id: memberId,
+    public_key: `key-${memberId}`,
+    joined_at: '2026-01-01T00:00:00.000Z',
+    role: memberId === userId ? 'owner' : 'member',
+  }));
+  const client = {
+    auth: {
+      getSession: async () => ({ data: { session: { user: { id: userId } } }, error: null }),
+    },
+    rpc: async (name: string) => name === 'list_group_members'
+      ? { data: members, error: null }
+      : { data: null, error: null },
+    from: () => ({ select: () => ({ in: async () => ({ data: [], error: null }) }) }),
+    channel: () => channel,
+    removeChannel: async () => 'ok',
+  } as unknown as SupabaseClient;
+  const service = new SupabaseGroupsService(client, 'test-public-key');
+  await service.signInAnonymously();
+  const unsubscribe = await service.subscribeRealtimeSignals(groupId, (senderId, envelope) => {
+    delivered.push({ senderId, envelope });
+  });
+  const mediaState = {
+    version: 1,
+    kind: 'media-state',
+    groupId,
+    senderId: userId,
+    recipientId: peerId,
+    media: 'voice',
+    active: true,
+    signature: { algorithm: 'Ed25519', signature: 'AQ==' },
+  };
+
+  await service.sendRealtimeSignal(groupId, mediaState);
+  assert.deepEqual(sent, [{
+    type: 'broadcast',
+    event: 'signal',
+    payload: { envelope: mediaState },
+  }]);
+  await assert.rejects(service.sendRealtimeSignal(groupId, { ...mediaState, recipientId: outsiderId }), /not a member/u);
+  await assert.rejects(service.sendRealtimeSignal(groupId, { ...mediaState, active: 'yes' }), /Invalid targeted signaling envelope/u);
+
+  assert.equal(broadcastCallbacks.length, 1);
+  broadcastCallbacks[0]({ payload: { envelope: { ...mediaState, senderId: peerId, recipientId: userId } } });
+  broadcastCallbacks[0]({ payload: { envelope: { ...mediaState, senderId: outsiderId, recipientId: userId } } });
+  broadcastCallbacks[0]({ payload: { envelope: { ...mediaState, senderId: peerId, recipientId: outsiderId } } });
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(delivered[0], {
+    senderId: peerId,
+    envelope: { ...mediaState, senderId: peerId, recipientId: userId },
+  });
+
+  await unsubscribe();
+});

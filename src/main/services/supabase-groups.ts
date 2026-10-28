@@ -53,11 +53,12 @@ export function groupPresenceFromSnapshot(
 }
 
 function isTargetedSignal(envelope: SignedProtocolEnvelope): envelope is Extract<SignedProtocolEnvelope,
-  { kind: 'description' | 'ice-batch' | 'connect-request' | 'protocol-error' }> {
+  { kind: 'description' | 'ice-batch' | 'connect-request' | 'protocol-error' | 'media-state' }> {
   return envelope.kind === 'description'
     || envelope.kind === 'ice-batch'
     || envelope.kind === 'connect-request'
-    || envelope.kind === 'protocol-error';
+    || envelope.kind === 'protocol-error'
+    || envelope.kind === 'media-state';
 }
 
 const REALTIME_SIGNAL_EVENT = 'signal';

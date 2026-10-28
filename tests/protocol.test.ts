@@ -8,8 +8,11 @@ import {
   type IdentitySigner,
   type IdentityVerifier,
   type SignedChatEnvelope,
+  type SignedMediaStateEnvelope,
   type SignedProtocolEnvelope,
+  verifyProtocolEnvelope,
 } from '../src/shared/webrtc-protocol';
+import { PeerMesh } from '../src/renderer/rtc/peer-mesh';
 import { MessageSynchronizer, type LocalMessageStore } from '../src/renderer/rtc/message-sync';
 
 const groupId = 'cloud-room';
@@ -199,4 +202,112 @@ test('notifica uma mensagem remota nova uma vez e não notifica duplicatas nem l
   assert.deepEqual(synchronized.ordered, []);
   await synchronized.synchronizer.receive(peerId, JSON.stringify(historyMessage));
   assert.deepEqual(synchronized.ordered, []);
+});
+
+test('valida envelopes direcionados de estado de mídia sem tolerar campos inválidos', async () => {
+  const identity = createIdentity();
+  const signer = createSigner(localId, identity.privateKey);
+  const envelope = await signProtocolEnvelope({
+    version: WEBRTC_PROTOCOL_VERSION,
+    kind: 'media-state',
+    groupId,
+    senderId: localId,
+    recipientId: peerId,
+    media: 'voice',
+    active: true,
+  }, signer);
+
+  assert.deepEqual(parseProtocolEnvelope(JSON.stringify(envelope)), { ok: true, envelope });
+  for (const invalid of [
+    { ...envelope, media: 'microphone' },
+    { ...envelope, active: 1 },
+    { ...envelope, recipientId: '' },
+    { ...envelope, unexpected: true },
+  ]) {
+    assert.deepEqual(parseProtocolEnvelope(JSON.stringify(invalid)), { ok: false, code: 'malformed-envelope' });
+  }
+});
+
+test('routes only member-authenticated media state without allocating a peer connection', async () => {
+  const localIdentity = createIdentity();
+  const peerIdentity = createIdentity();
+  const outsiderIdentity = createIdentity();
+  const signer = createSigner(localId, localIdentity.privateKey);
+  const peerSigner = createSigner(peerId, peerIdentity.privateKey);
+  const outsiderSigner = createSigner('outsider', outsiderIdentity.privateKey);
+  const keys = new Map([[localId, localIdentity.publicKey], [peerId, peerIdentity.publicKey]]);
+  const verifier: IdentityVerifier = {
+    verify: async (_participantId, bytes, signature, publicKey) => {
+      if (!publicKey) return false;
+      try {
+        return verifyBytes(null, Buffer.from(bytes), createPublicKey(publicKey), Buffer.from(signature.signature, 'base64'));
+      } catch {
+        return false;
+      }
+    },
+  };
+  let receiveSignal: ((transportPeerId: string, message: unknown) => void) | undefined;
+  const sent: Array<{ peerId: string; envelope: SignedProtocolEnvelope }> = [];
+  const mediaStates: Array<{ peerId: string; media: 'voice' | 'screen'; active: boolean }> = [];
+  const mesh = new PeerMesh({
+    groupId,
+    localParticipantId: localId,
+    signaling: {
+      send: async (target, envelope) => { sent.push({ peerId: target, envelope }); },
+      subscribe: (listener) => {
+        receiveSignal = listener;
+        return () => { receiveSignal = undefined; };
+      },
+    },
+    signer,
+    verifier,
+    store: createMemoryStore().store,
+    isGroupMember: async (requestedGroup, participantId) => requestedGroup === groupId && keys.has(participantId),
+    getGroupMemberIds: async () => [localId, peerId],
+    getMemberPublicKey: async (requestedGroup, participantId) => requestedGroup === groupId ? keys.get(participantId) : undefined,
+    callbacks: { onMediaState: (sender, media, active) => mediaStates.push({ peerId: sender, media, active }) },
+  });
+  const signState = async (
+    stateSigner: IdentitySigner,
+    values: { requestedGroup?: string; recipientId?: string; media?: 'voice' | 'screen'; active?: boolean } = {},
+  ): Promise<SignedMediaStateEnvelope> => await signProtocolEnvelope({
+    version: WEBRTC_PROTOCOL_VERSION,
+    kind: 'media-state',
+    groupId: values.requestedGroup ?? groupId,
+    senderId: stateSigner.participantId,
+    recipientId: values.recipientId ?? localId,
+    media: values.media ?? 'voice',
+    active: values.active ?? true,
+  }, stateSigner) as SignedMediaStateEnvelope;
+  const deliver = async (transportPeerId: string, envelope: unknown) => {
+    const receive = receiveSignal;
+    assert.ok(receive);
+    receive(transportPeerId, envelope);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+
+  try {
+    await mesh.sendMediaState(peerId, 'screen', false);
+    const outbound = sent[0]?.envelope;
+    assert.ok(outbound?.kind === 'media-state');
+    assert.equal(outbound.recipientId, peerId);
+    assert.equal(await verifyProtocolEnvelope(outbound, verifier, localIdentity.publicKey), true);
+
+    const valid = await signState(peerSigner);
+    await deliver(peerId, valid);
+    await deliver('transport-spoof', valid);
+    await deliver(peerId, await signState(peerSigner, { media: 'screen', active: false }));
+    const tampered = { ...valid, active: false };
+    await deliver(peerId, tampered);
+    await deliver(peerId, await signState(peerSigner, { requestedGroup: 'another-group' }));
+    await deliver(peerId, await signState(peerSigner, { recipientId: 'other-device' }));
+    await deliver('outsider', await signState(outsiderSigner));
+
+    assert.deepEqual(mediaStates, [
+      { peerId, media: 'voice', active: true },
+      { peerId, media: 'screen', active: false },
+    ]);
+  } finally {
+    mesh.close();
+  }
 });

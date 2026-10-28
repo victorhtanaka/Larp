@@ -21,6 +21,7 @@ export class RemoteAudioParticipants {
   private readonly tracksByPeer = new Map<string, Map<MediaStreamTrack, RemoteAudioTrackRecord>>();
   private readonly videoStreamIdsByPeer = new Map<string, Set<string>>();
   private readonly peerStates = new Map<string, PeerConnectionStatus>();
+  private readonly voiceActiveByPeer = new Map<string, boolean>();
   private readonly participatingPeers = new Set<string>();
 
   get peerIds(): readonly string[] {
@@ -39,6 +40,52 @@ export class RemoteAudioParticipants {
     this.peerStates.set(peerId, state);
     this.updateVoiceParticipation(peerId);
   }
+
+  setVoiceActive(peerId: string, active: boolean): {
+    records: RemoteAudioTrackRecord[];
+    peerJoined: boolean;
+    peerLeft: boolean;
+  } {
+    const wasParticipating = this.participatingPeers.has(peerId);
+    this.voiceActiveByPeer.set(peerId, active);
+    this.updateVoiceParticipation(peerId);
+    const isParticipating = this.participatingPeers.has(peerId);
+    return {
+      records: [...(this.tracksByPeer.get(peerId)?.values() ?? [])].filter((record) => record.source === 'voice'),
+      peerJoined: !wasParticipating && isParticipating,
+      peerLeft: wasParticipating && !isParticipating,
+    };
+  }
+
+  removeSource(peerId: string, source: RemoteAudioSource): {
+    records: RemoteAudioTrackRecord[];
+    peerLeft: boolean;
+  } {
+    const tracks = this.tracksByPeer.get(peerId);
+    if (!tracks) return { records: [], peerLeft: false };
+    const wasParticipating = this.participatingPeers.has(peerId);
+    const records: RemoteAudioTrackRecord[] = [];
+    for (const [track, record] of tracks) {
+      if (record.source !== source) continue;
+      tracks.delete(track);
+      records.push(record);
+    }
+    if (tracks.size === 0) this.tracksByPeer.delete(peerId);
+    this.updateVoiceParticipation(peerId);
+    return {
+      records,
+      peerLeft: wasParticipating && !this.participatingPeers.has(peerId),
+    };
+  }
+
+  videoStreamIds(peerId: string): readonly string[] {
+    return [...(this.videoStreamIdsByPeer.get(peerId) ?? [])];
+  }
+
+  clearVideoStreams(peerId: string): void {
+    this.videoStreamIdsByPeer.delete(peerId);
+  }
+
 
   addAudioTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]): { record: RemoteAudioTrackRecord; added: boolean } {
     const existingTracks = this.tracksByPeer.get(peerId);
@@ -107,6 +154,7 @@ export class RemoteAudioParticipants {
     const records = [...(this.tracksByPeer.get(peerId)?.values() ?? [])];
     this.tracksByPeer.delete(peerId);
     this.videoStreamIdsByPeer.delete(peerId);
+    this.voiceActiveByPeer.delete(peerId);
     this.peerStates.delete(peerId);
     this.participatingPeers.delete(peerId);
     return records;
@@ -115,6 +163,7 @@ export class RemoteAudioParticipants {
   clear(): void {
     this.tracksByPeer.clear();
     this.videoStreamIdsByPeer.clear();
+    this.voiceActiveByPeer.clear();
     this.peerStates.clear();
     this.participatingPeers.clear();
   }
@@ -139,6 +188,11 @@ export class RemoteAudioParticipants {
         }
       }
     }
+    if (this.voiceActiveByPeer.get(peerId) === false) {
+      this.participatingPeers.delete(peerId);
+      return;
+    }
+
     if (hasVoiceTrack) {
       this.participatingPeers.add(peerId);
       return;

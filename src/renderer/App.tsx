@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChatMessage, SelectedDisplaySource, TurnCredentialServer } from '../shared/contracts';
 import type { CloudConnectionStatus, GroupInvite, GroupInviteSummary, GroupMember, GroupPresenceStatus, GroupSummary, PublicIdentity, UserProfile } from '../shared/cloud-contracts';
 import { USER_PROFILE_AVATAR_MAX_BYTES, USER_PROFILE_NAME_MAX_LENGTH, USER_PROFILE_SOURCE_MAX_BYTES } from '../shared/cloud-contracts';
@@ -21,7 +21,7 @@ function describeError(_error: unknown, fallback: string): string {
   return fallback;
 }
 
-type IconName = 'bubble' | 'bell' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark';
+type IconName = 'bubble' | 'bell' | 'grid' | 'plus' | 'arrow' | 'info' | 'lock' | 'send' | 'mic' | 'headphones' | 'screen' | 'expand' | 'shrink' | 'users' | 'close' | 'chevron' | 'spark' | 'settings';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const shapes: Record<IconName, ReactNode> = {
@@ -42,6 +42,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     close: <><path d="m18 6-12 12M6 6l12 12" /></>,
     chevron: <><path d="m9 18 6-6-6-6" /></>,
     spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z" /></>,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4L7.3 15a8 8 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 2Z" /></>,
   };
 
   return (
@@ -50,6 +51,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     </svg>
   );
 }
+type VolumePopover = { media: 'voice'; userId: string; left: number; top: number } | { media: 'transmission'; left: number; top: number };
 
 const DEFAULT_ACCENT_COLOR = '#78a9ff';
 const ACCENT_COLOR_STORAGE_KEY = 'larp-accent-color';
@@ -294,6 +296,7 @@ function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'connection' | 'groups' | 'audio' | 'screen' | 'profile' | 'appearance'>('connection');
   const [screenViewerExpanded, setScreenViewerExpanded] = useState(false);
+  const [volumePopover, setVolumePopover] = useState<VolumePopover | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [accentColor, setAccentColor] = useState(loadAccentColor);
@@ -314,6 +317,9 @@ function App() {
   const helpCloseRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement | null>(null);
   const screenViewerToggleRef = useRef<HTMLButtonElement>(null);
+  const volumePopoverRef = useRef<HTMLDivElement>(null);
+  const volumePopoverCloseRef = useRef<HTMLButtonElement>(null);
+  const volumePopoverTriggerRef = useRef<HTMLElement | null>(null);
   const offlineMode = cloudStatus.state === 'unavailable' || cloudStatus.state === 'not-configured';
   const connectionCopy = connectionPresentation(cloudStatus);
   const listedCloudGroups = cloudStatus.state === 'ready'
@@ -448,6 +454,24 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [changeScreenViewerMode, screenViewerExpanded]);
+  useEffect(() => {
+    if (!volumePopover) return;
+    volumePopoverCloseRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setVolumePopover(null);
+      requestAnimationFrame(() => volumePopoverTriggerRef.current?.focus());
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !volumePopoverRef.current?.contains(event.target)) setVolumePopover(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [volumePopover]);
 
 
   useEffect(() => {
@@ -735,6 +759,7 @@ function App() {
             media.handleRemotePeerState(peerId, state);
           },
           onTrack: media.handleRemoteTrack,
+          onMediaState: media.handleRemoteMediaState,
           onError: (_message) => { if (current) setPeerError('Não foi possível conectar aos participantes. Tente novamente.'); },
         });
         meshRef.current = mesh;
@@ -751,7 +776,7 @@ function App() {
       mesh?.close();
       if (meshRef.current === mesh) meshRef.current = null;
     };
-  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, meshMembers, meshRetryNonce, media.handleRemoteTrack, media.handleRemotePeerState, media.playMessageNotificationSound]);
+  }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading, meshMembers, meshRetryNonce, media.handleRemoteTrack, media.handleRemotePeerState, media.handleRemoteMediaState, media.playMessageNotificationSound]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -1099,6 +1124,54 @@ function App() {
         };
       }),
   ];
+  const placeVolumePopover = (popover: { media: 'voice'; userId: string } | { media: 'transmission' }, trigger: HTMLElement, x: number, y: number) => {
+    volumePopoverTriggerRef.current = trigger;
+    const left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - 272));
+    const top = Math.min(Math.max(8, y), Math.max(8, window.innerHeight - 176));
+    setVolumePopover({ ...popover, left, top });
+  };
+  const openVoiceVolumeAt = (userId: string, trigger: HTMLElement, x: number, y: number) => {
+    placeVolumePopover({ media: 'voice', userId }, trigger, x, y);
+  };
+  const openVoiceVolumeFromClick = (userId: string, event: MouseEvent<HTMLButtonElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.detail === 0 ? bounds.left : event.clientX;
+    const y = event.detail === 0 ? bounds.bottom : event.clientY;
+    openVoiceVolumeAt(userId, event.currentTarget, x, y);
+  };
+  const openTransmissionVolumeAt = (trigger: HTMLElement, x: number, y: number) => {
+    placeVolumePopover({ media: 'transmission' }, trigger, x, y);
+  };
+  const openTransmissionVolumeFromClick = (event: MouseEvent<HTMLButtonElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.detail === 0 ? bounds.right : event.clientX;
+    const y = event.detail === 0 ? bounds.bottom : event.clientY;
+    openTransmissionVolumeAt(event.currentTarget, x, y);
+  };
+  const voiceVolumeContextMenu = (userId: string) => (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    openVoiceVolumeAt(userId, event.currentTarget, event.clientX, event.clientY);
+  };
+  const voiceVolumeKeyDown = (userId: string) => (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    openVoiceVolumeAt(userId, event.currentTarget, bounds.left, bounds.bottom);
+  };
+  const transmissionVolumeContextMenu = (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    openTransmissionVolumeAt(event.currentTarget, event.clientX, event.clientY);
+  };
+  const transmissionVolumeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    openTransmissionVolumeAt(event.currentTarget, bounds.left, bounds.bottom);
+  };
+  const closeVolumePopover = () => {
+    setVolumePopover(null);
+    requestAnimationFrame(() => volumePopoverTriggerRef.current?.focus());
+  };
   const openNotification = (notification: AppNotification) => {
     dispatchNotifications({ type: 'read', id: notification.id });
     if (listedCloudGroups.some((group) => group.id === notification.groupId)) selectCloudGroup(notification.groupId);
@@ -1174,6 +1247,33 @@ function App() {
             <strong>{selfProfile?.displayName || (identity ? 'Este computador' : 'Larp')}</strong>
             <span>{selfProfile ? 'Perfil dos grupos em comum' : identity ? 'Identidade protegida neste computador' : 'Identidade indisponível'}</span>
           </div>
+          <div className="sidebar-audio-controls" aria-label="Controles de áudio">
+            <button
+              className={`icon-button sidebar-audio-button${media.micMuted ? ' call-control-muted' : ''}`}
+              type="button"
+              disabled={media.callActive && media.audioBusy}
+              aria-label={media.callActive ? media.micMuted ? 'Ativar microfone' : 'Silenciar microfone' : 'Configurar microfone'}
+              title={media.callActive ? media.micMuted ? 'Ativar microfone' : 'Silenciar microfone' : 'Configurar microfone'}
+              aria-pressed={media.callActive ? media.micMuted : undefined}
+              onClick={media.callActive ? media.toggleMicrophoneMuted : openAudioSettings}
+            >
+              <Icon name="mic" size={16} />
+            </button>
+            <button
+              className={`icon-button sidebar-audio-button${media.playbackMuted ? ' call-control-muted' : ''}`}
+              type="button"
+              disabled={!activeCloudGroup || !media.mediaReady}
+              aria-label={media.playbackMuted ? 'Ativar áudio recebido' : 'Silenciar áudio recebido'}
+              title={media.playbackMuted ? 'Ativar áudio recebido' : 'Silenciar áudio recebido'}
+              aria-pressed={media.playbackMuted}
+              onClick={media.togglePlaybackMuted}
+            >
+              <Icon name="headphones" size={16} />
+            </button>
+            <button className="icon-button sidebar-audio-button" type="button" aria-label="Configurar dispositivos de áudio" title="Configurar dispositivos de áudio" onClick={openAudioSettings}>
+              <Icon name="settings" size={16} />
+            </button>
+          </div>
           <button
             className="profile-edit"
             type="button"
@@ -1183,9 +1283,6 @@ function App() {
             onClick={(event) => void openProfileEditor(event)}
           >
             Editar
-          </button>
-          <button className="icon-button profile-info" type="button" aria-label="Ver estado da conexão" onClick={openHelp}>
-            <Icon name="info" size={17} />
           </button>
         </div>
       </aside>
@@ -1237,6 +1334,96 @@ function App() {
             </button>
           </div>
         )}
+        {(media.displayStream || media.remoteVideoStream || callParticipants.length > 0) && (
+          <section className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`} aria-label="Palco da chamada">
+            <div className="screen-stage-header">
+              <div className="screen-stage-heading">
+                <strong>{media.displayStream
+                  ? `Você está compartilhando · ${media.shareSourceName}`
+                  : media.remoteVideoStream ? 'Tela compartilhada ao vivo' : 'Chamada de voz'}</strong>
+                {callParticipants.length > 0 && (
+                  <span>{callParticipants.length} {callParticipants.length === 1 ? 'participante na chamada' : 'participantes na chamada'}</span>
+                )}
+              </div>
+              {(media.displayStream || media.remoteVideoStream) && (
+                <button
+                  ref={screenViewerToggleRef}
+                  type="button"
+                  className="screen-stage-toggle"
+                  aria-label={screenViewerExpanded ? 'Sair da tela cheia em janela' : 'Exibir transmissão em tela cheia na janela'}
+                  aria-pressed={screenViewerExpanded}
+                  aria-keyshortcuts={screenViewerExpanded ? 'Escape' : undefined}
+                  title={screenViewerExpanded ? 'Restaurar janela anterior (Esc)' : 'Maximizar sem ocultar a barra de tarefas'}
+                  onClick={() => changeScreenViewerMode(!screenViewerExpanded)}
+                >
+                  <Icon name={screenViewerExpanded ? 'shrink' : 'expand'} size={16} />
+                  <span>{screenViewerExpanded ? 'Sair da tela cheia' : 'Tela cheia em janela'}</span>
+                </button>
+              )}
+            </div>
+            <div className={`call-stage-layout${media.displayStream || media.remoteVideoStream ? ' call-stage-layout-screen' : ''}${(media.displayStream || media.remoteVideoStream) && callParticipants.length > 0 ? ' call-stage-layout-sharing' : ''}`}>
+              {(media.displayStream || media.remoteVideoStream) && (
+                <div className="call-stage-screen">
+                  <video
+                    ref={media.screenVideoRef}
+                    muted={Boolean(media.displayStream)}
+                    autoPlay
+                    playsInline
+                    aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'}
+                    tabIndex={media.remoteVideoStream && !media.displayStream ? 0 : undefined}
+                    aria-keyshortcuts={media.remoteVideoStream && !media.displayStream ? 'Shift+F10' : undefined}
+                    onContextMenu={media.remoteVideoStream && !media.displayStream ? transmissionVolumeContextMenu : undefined}
+                    onKeyDown={media.remoteVideoStream && !media.displayStream ? transmissionVolumeKeyDown : undefined}
+                  />
+                  {media.remoteVideoStream && !media.displayStream && (
+                    <button
+                      type="button"
+                      className="screen-volume-trigger"
+                      aria-label="Ajustar volume da transmissão"
+                      aria-haspopup="dialog"
+                      onClick={openTransmissionVolumeFromClick}
+                    >
+                      <Icon name="headphones" size={15} />
+                    </button>
+                  )}
+                </div>
+              )}
+              {callParticipants.length > 0 && (
+                <div className={`call-stage-participants${media.displayStream || media.remoteVideoStream ? ' call-stage-participants-side' : ''}`} aria-label="Participantes na chamada">
+                  {callParticipants.map((participant) => (
+                    <article
+                      className={`call-stage-participant${participant.isSpeaking ? ' call-stage-participant-speaking' : ''}${participant.isReconnecting ? ' call-stage-participant-reconnecting' : ''}`}
+                      key={participant.id}
+                      aria-label={`${participant.label}, ${participant.isReconnecting ? 'reconectando' : participant.isSpeaking ? 'falando' : 'conectado'}`}
+                      onContextMenu={!participant.isLocal ? voiceVolumeContextMenu(participant.id) : undefined}
+                      onKeyDown={!participant.isLocal ? voiceVolumeKeyDown(participant.id) : undefined}
+                    >
+                      <ProfileAvatar
+                        className="call-stage-participant-avatar"
+                        profile={participant.profile}
+                        initials={profileInitials(participant.profile?.displayName, participant.isLocal ? 'PC' : participant.id.slice(-2).toUpperCase())}
+                      />
+                      <strong className="call-stage-participant-name">{participant.label}</strong>
+                      <span className="call-stage-participant-status">{participant.isReconnecting ? 'Reconectando' : participant.isSpeaking ? 'Falando' : 'Conectado'}</span>
+                      {!participant.isLocal && (
+                        <button
+                          type="button"
+                          className="participant-volume-trigger"
+                          aria-label={`Ajustar volume de ${participant.label}`}
+                          aria-haspopup="dialog"
+                          aria-keyshortcuts="Shift+F10"
+                          onClick={(event) => openVoiceVolumeFromClick(participant.id, event)}
+                        >
+                          <Icon name="headphones" size={14} />
+                        </button>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
 
         <section className="message-list" aria-label={notificationsOpen ? 'Notificações' : `Mensagens de ${activeGroup?.name ?? 'grupo'}`} aria-live={!notificationsOpen && !screenViewerExpanded ? 'polite' : 'off'}>
@@ -1248,61 +1435,6 @@ function App() {
             />
           ) : (
             <>
-          {(media.displayStream || media.remoteVideoStream || callParticipants.length > 0) && (
-            <section className={`screen-stage${screenViewerExpanded ? ' screen-stage-expanded' : ''}`} aria-label="Palco da chamada">
-              <div className="screen-stage-header">
-                <div className="screen-stage-heading">
-                  <strong>{media.displayStream
-                    ? `Você está compartilhando · ${media.shareSourceName}`
-                    : media.remoteVideoStream ? 'Tela compartilhada ao vivo' : 'Chamada de voz'}</strong>
-                  {callParticipants.length > 0 && (
-                    <span>{callParticipants.length} {callParticipants.length === 1 ? 'participante na chamada' : 'participantes na chamada'}</span>
-                  )}
-                </div>
-                {(media.displayStream || media.remoteVideoStream) && (
-                  <button
-                    ref={screenViewerToggleRef}
-                    type="button"
-                    className="screen-stage-toggle"
-                    aria-label={screenViewerExpanded ? 'Sair da tela cheia em janela' : 'Exibir transmissão em tela cheia na janela'}
-                    aria-pressed={screenViewerExpanded}
-                    aria-keyshortcuts={screenViewerExpanded ? 'Escape' : undefined}
-                    title={screenViewerExpanded ? 'Restaurar janela anterior (Esc)' : 'Maximizar sem ocultar a barra de tarefas'}
-                    onClick={() => changeScreenViewerMode(!screenViewerExpanded)}
-                  >
-                    <Icon name={screenViewerExpanded ? 'shrink' : 'expand'} size={16} />
-                    <span>{screenViewerExpanded ? 'Sair da tela cheia' : 'Tela cheia em janela'}</span>
-                  </button>
-                )}
-              </div>
-              <div className={`call-stage-layout${media.displayStream || media.remoteVideoStream ? ' call-stage-layout-screen' : ''}${(media.displayStream || media.remoteVideoStream) && callParticipants.length > 0 ? ' call-stage-layout-sharing' : ''}`}>
-                {(media.displayStream || media.remoteVideoStream) && (
-                  <div className="call-stage-screen">
-                    <video ref={media.screenVideoRef} muted={Boolean(media.displayStream)} autoPlay playsInline aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'} />
-                  </div>
-                )}
-                {callParticipants.length > 0 && (
-                  <div className={`call-stage-participants${media.displayStream || media.remoteVideoStream ? ' call-stage-participants-side' : ''}`} aria-label="Participantes na chamada">
-                    {callParticipants.map((participant) => (
-                      <article
-                        className={`call-stage-participant${participant.isSpeaking ? ' call-stage-participant-speaking' : ''}${participant.isReconnecting ? ' call-stage-participant-reconnecting' : ''}`}
-                        key={participant.id}
-                        aria-label={`${participant.label}, ${participant.isReconnecting ? 'reconectando' : participant.isSpeaking ? 'falando' : 'conectado'}`}
-                      >
-                        <ProfileAvatar
-                          className="call-stage-participant-avatar"
-                          profile={participant.profile}
-                          initials={profileInitials(participant.profile?.displayName, participant.isLocal ? 'PC' : participant.id.slice(-2).toUpperCase())}
-                        />
-                        <strong className="call-stage-participant-name">{participant.label}</strong>
-                        <span className="call-stage-participant-status">{participant.isReconnecting ? 'Reconectando' : participant.isSpeaking ? 'Falando' : 'Conectado'}</span>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
           {cloudStatus.state === 'connecting' ? (
             <div className="loading-state"><span className="loading-dot" />Carregando grupos…</div>
           ) : displayCloudGroup ? activeCloudGroup ? (
@@ -1358,26 +1490,6 @@ function App() {
             </div>
 
             <div className="call-actions">
-              <button
-                type="button"
-                className={`call-control ${media.micMuted ? 'call-control-muted' : ''}`}
-                disabled={!activeCloudGroup || !media.mediaReady || media.audioBusy}
-                aria-label={media.callActive ? media.micMuted ? 'Ativar microfone' : 'Silenciar microfone' : 'Configurar microfone'}
-                aria-pressed={media.callActive ? media.micMuted : undefined}
-                onClick={media.callActive ? media.toggleMicrophoneMuted : openAudioSettings}
-              >
-                <Icon name="mic" size={17} /><span>{media.callActive ? media.micMuted ? 'Mic silenciado' : 'Microfone' : 'Microfone'}</span>
-              </button>
-              <button
-                type="button"
-                className={`call-control ${media.playbackMuted ? 'call-control-muted' : ''}`}
-                disabled={!activeCloudGroup || !media.mediaReady}
-                aria-label={media.playbackMuted ? 'Ativar áudio recebido' : 'Silenciar áudio recebido'}
-                aria-pressed={media.playbackMuted}
-                onClick={media.togglePlaybackMuted}
-              >
-                <Icon name="headphones" size={17} /><span>{media.playbackMuted ? 'Áudio silenciado' : 'Saída de áudio'}</span>
-              </button>
               <label className="playback-volume-control">
                 <span>Voz</span>
                 <input
@@ -1392,27 +1504,11 @@ function App() {
                 />
                 <output aria-hidden="true">{Math.round(media.voicePlaybackVolume * 100)}%</output>
               </label>
-              <label className="playback-volume-control">
-                <span>Transmissão</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={Math.round(media.transmissionPlaybackVolume * 100)}
-                  disabled={!media.mediaReady || !media.remoteTransmissionAudioAvailable}
-                  aria-label="Volume da transmissão"
-                  onChange={(event) => media.setTransmissionPlaybackVolume(Number(event.currentTarget.value) / 100)}
-                />
-                <output aria-hidden="true">{Math.round(media.transmissionPlaybackVolume * 100)}%</output>
-              </label>
-
-              <button type="button" className="call-control device-control" disabled={!activeCloudGroup || !media.mediaReady} onClick={openAudioSettings}>Dispositivos</button>
               <button
                 type="button"
                 className={`call-join ${media.callActive ? 'call-join-leave' : ''}`}
-                disabled={!activeCloudGroup || !meshReady || !media.mediaReady || connectedPeerCount === 0 || media.audioBusy}
-                title={connectedPeerCount === 0 ? 'A chamada exige ao menos um participante conectado' : 'A voz será compartilhada com os participantes conectados'}
+                disabled={!activeCloudGroup || !meshReady || !media.mediaReady || media.audioBusy}
+                title="Entrar na chamada e compartilhar voz com os participantes conectados"
                 onClick={(event) => {
                   if (media.callActive) void media.stopCall();
                   else if (!media.selectedMicrophoneId) openAudioSettings(event);
@@ -1490,7 +1586,15 @@ function App() {
                 Boolean(activeCloudGroup && presenceReady),
               );
               return (
-                <li key={member.userId} className="member-row">
+                <li
+                  key={member.userId}
+                  className="member-row"
+                  tabIndex={!isSelf ? 0 : undefined}
+                  aria-label={!isSelf ? `${label}, ${roleLabel}` : undefined}
+                  aria-keyshortcuts={!isSelf ? 'Shift+F10' : undefined}
+                  onContextMenu={!isSelf ? voiceVolumeContextMenu(member.userId) : undefined}
+                  onKeyDown={!isSelf ? voiceVolumeKeyDown(member.userId) : undefined}
+                >
                   <ProfileAvatar
                     className={`avatar member-avatar ${isSelf ? 'avatar-local' : ''}`}
                     profile={member.profile}
@@ -1498,6 +1602,18 @@ function App() {
                     presence={presenceForMember}
                   />
                   <span className="member-name"><strong>{label}</strong><span>{roleLabel}</span></span>
+                  {!isSelf && (
+                    <button
+                      className="member-volume-trigger"
+                      type="button"
+                      aria-label={`Ajustar volume de ${label}`}
+                      aria-haspopup="dialog"
+                      aria-keyshortcuts="Shift+F10"
+                      onClick={(event) => openVoiceVolumeFromClick(member.userId, event)}
+                    >
+                      <Icon name="headphones" size={14} />
+                    </button>
+                  )}
                   {activeCloudGroup?.role === 'owner' && !isSelf && (
                     <button className="remove-member" type="button" disabled={Boolean(cloudAction)} aria-label={`Remover ${label}`} title="Remover membro" onClick={() => void removeMember(member)}>
                       <Icon name="close" size={14} />
@@ -1772,7 +1888,56 @@ function App() {
           </section>
         </div>
       )}
-      <audio ref={media.voiceAudioElementRef} className="sr-only" autoPlay aria-label="Áudio remoto de voz" />
+      {volumePopover && (
+        <div
+          ref={volumePopoverRef}
+          className="volume-popover"
+          role="dialog"
+          aria-labelledby="volume-popover-title"
+          style={{ left: volumePopover.left, top: volumePopover.top }}
+        >
+          <button ref={volumePopoverCloseRef} className="icon-button volume-popover-close" type="button" aria-label="Fechar controle de volume" onClick={closeVolumePopover}>
+            <Icon name="close" size={15} />
+          </button>
+          {volumePopover.media === 'voice' ? (
+            <>
+              <strong id="volume-popover-title">Volume de {profilesByUserId.get(volumePopover.userId)?.displayName?.trim() || `Participante · ${volumePopover.userId.slice(-6).toUpperCase()}`}</strong>
+              <label className="volume-popover-slider">
+                <span>Voz</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round((media.voiceParticipantVolumes[volumePopover.userId] ?? media.voicePlaybackVolume) * 100)}
+                  aria-label={`Volume de voz para ${profilesByUserId.get(volumePopover.userId)?.displayName?.trim() || volumePopover.userId}`}
+                  onChange={(event) => media.setVoiceParticipantVolume(volumePopover.userId, Number(event.currentTarget.value) / 100)}
+                />
+                <output>{Math.round((media.voiceParticipantVolumes[volumePopover.userId] ?? media.voicePlaybackVolume) * 100)}%</output>
+              </label>
+              <p>Volume global × volume deste participante.</p>
+            </>
+          ) : (
+            <>
+              <strong id="volume-popover-title">Volume da transmissão</strong>
+              <label className="volume-popover-slider">
+                <span>Tela</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(media.transmissionPlaybackVolume * 100)}
+                  aria-label="Volume da transmissão de tela"
+                  onChange={(event) => media.setTransmissionPlaybackVolume(Number(event.currentTarget.value) / 100)}
+                />
+                <output>{Math.round(media.transmissionPlaybackVolume * 100)}%</output>
+              </label>
+              <p>Aplica-se ao áudio da tela compartilhada.</p>
+            </>
+          )}
+        </div>
+      )}
       <audio ref={media.transmissionAudioElementRef} className="sr-only" autoPlay aria-label="Áudio remoto da transmissão" />
     </main>
   );

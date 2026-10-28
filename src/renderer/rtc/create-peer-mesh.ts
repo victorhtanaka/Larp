@@ -14,6 +14,7 @@ export interface GroupPeerMeshOptions {
   onMessage: (message: SignedChatEnvelope) => void;
   onPeerState: (peerId: string, state: PeerConnectionStatus) => void;
   onError: (message: string) => void;
+  onMediaState?: (peerId: string, media: 'voice' | 'screen', active: boolean) => void;
   onTrack?: (peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) => void;
 }
 
@@ -50,6 +51,7 @@ export function createGroupPeerMesh(options: GroupPeerMeshOptions): PeerMesh {
       onOrderedMessage: onMessage,
       onPeerState,
       onTrack: options.onTrack,
+      onMediaState: options.onMediaState,
       onProtocolError: (_peerId, _code, detail) => onError(detail),
     },
   });

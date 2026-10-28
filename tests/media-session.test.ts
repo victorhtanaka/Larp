@@ -3,11 +3,46 @@ import { test } from 'node:test';
 import { MediaSession, supportsNoiseSuppression } from '../src/renderer/media/session';
 import { loadNoiseSuppression, saveNoiseSuppression } from '../src/renderer/media/noise-suppression';
 import {
-  loadTransmissionPlaybackVolume,
+  loadVoiceParticipantVolumes,
   loadVoicePlaybackVolume,
+  loadTransmissionPlaybackVolume,
   saveTransmissionPlaybackVolume,
+  saveVoiceParticipantVolumes,
   saveVoicePlaybackVolume,
 } from '../src/renderer/media/playback-volume';
+
+interface AudioOutputStub {
+  muted: boolean;
+  volume: number;
+  autoplay: boolean;
+  srcObject: MediaStream | null;
+  paused: boolean;
+  playCount: number;
+  sinkIds: string[];
+  play(): Promise<void>;
+  pause(): void;
+  setSinkId(sinkId: string): Promise<void>;
+}
+
+function createAudioOutputStub(): AudioOutputStub {
+  return {
+    muted: false,
+    volume: 1,
+    autoplay: false,
+    srcObject: null,
+    paused: true,
+    playCount: 0,
+    sinkIds: [],
+    async play() { this.paused = false; this.playCount += 1; },
+    pause() { this.paused = true; },
+    async setSinkId(sinkId: string) { this.sinkIds.push(sinkId); },
+  };
+}
+
+function createAudioStream(): MediaStream {
+  const track = { readyState: 'live' } as MediaStreamTrack;
+  return { getAudioTracks: () => [track] } as unknown as MediaStream;
+}
 
 
 test('persists and restores noise suppression, defaulting on malformed data', () => {
@@ -60,33 +95,51 @@ test('threads noise suppression through permission and selected microphone const
   }
 });
 
-test('applies independent clamped voice and transmission volumes with a shared mute', () => {
+test('composes master and per-participant voice gains while keeping call mute separate from output mute', async () => {
+  const voiceOutputs: AudioOutputStub[] = [];
   const session = new MediaSession({
     mediaDevices: {} as MediaDevices,
     mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+    audioElementFactory: () => {
+      const output = createAudioOutputStub();
+      voiceOutputs.push(output);
+      return output as unknown as HTMLAudioElement;
+    },
   });
-  const voice = { muted: false, volume: 1 } as HTMLAudioElement;
-  const transmission = { muted: false, volume: 1 } as HTMLAudioElement;
-
-  session.setVoicePlaybackVolume(0.35);
+  const transmission = createAudioOutputStub();
+  session.setVoicePlaybackVolume(0.5);
+  session.setVoiceParticipantVolume('alice', 0.4);
   session.setTransmissionPlaybackVolume(0.7);
-  session.attachOutput(voice, transmission);
-  assert.equal(voice.volume, 0.35);
+  session.attachTransmissionOutput(transmission as unknown as HTMLAudioElement);
+  await session.setVoiceOutput('alice', createAudioStream());
+  const voice = voiceOutputs[0];
+  assert.ok(voice);
+  assert.equal(voice.volume, 0.2);
   assert.equal(transmission.volume, 0.7);
+  assert.equal(voice.playCount, 1);
 
   session.setVoicePlaybackVolume(1.4);
-  session.setTransmissionPlaybackVolume(-0.2);
+  session.setVoiceParticipantVolume('alice', 1.5);
   assert.equal(voice.volume, 1);
-  assert.equal(transmission.volume, 0);
   session.setVoicePlaybackVolume(Number.NaN);
   assert.equal(voice.volume, 1);
 
   session.setPlaybackMuted(true);
   assert.equal(voice.muted, true);
   assert.equal(transmission.muted, true);
+  session.setVoicePlaybackMuted(true);
+  session.setPlaybackMuted(false);
+  assert.equal(voice.muted, true);
+  assert.equal(transmission.muted, false);
+  session.setVoicePlaybackMuted(false);
+  assert.equal(voice.muted, false);
+  session.removeVoiceOutput('alice');
+  assert.equal(voice.paused, true);
+  assert.equal(voice.srcObject, null);
 });
 
-test('persists independent voice and transmission volumes and tolerates malformed or unavailable storage', () => {
+
+test('persists voice, transmission, and per-participant volumes and tolerates malformed storage', () => {
   const values = new Map<string, string>();
   const storage: Pick<Storage, 'getItem' | 'setItem'> = {
     getItem: (key) => values.get(key) ?? null,
@@ -94,40 +147,56 @@ test('persists independent voice and transmission volumes and tolerates malforme
   };
   saveVoicePlaybackVolume(storage, 0.42);
   saveTransmissionPlaybackVolume(storage, 0.73);
+  saveVoiceParticipantVolumes(storage, { alice: 0.25, bob: 1.4 });
   assert.equal(loadVoicePlaybackVolume(storage), 0.42);
   assert.equal(loadTransmissionPlaybackVolume(storage), 0.73);
+  assert.deepEqual(loadVoiceParticipantVolumes(storage), { alice: 0.25, bob: 1 });
   assert.equal(values.get('larp-playback-volume'), '0.42');
   assert.equal(values.get('larp-transmission-playback-volume'), '0.73');
-  saveVoicePlaybackVolume(storage, 1.5);
-  assert.equal(loadVoicePlaybackVolume(storage), 1);
+  assert.equal(values.get('larp-voice-participant-volumes'), '{"alice":0.25,"bob":1}');
   values.set('larp-playback-volume', 'invalid');
   values.set('larp-transmission-playback-volume', 'invalid');
+  values.set('larp-voice-participant-volumes', '{"alice":null,"bob":-1,"":0.5,"x":2}');
   assert.equal(loadVoicePlaybackVolume(storage), 1);
   assert.equal(loadTransmissionPlaybackVolume(storage), 1);
+  assert.deepEqual(loadVoiceParticipantVolumes(storage), { bob: 0, x: 1 });
   const unavailable = {
     getItem: () => { throw new Error('storage denied'); },
     setItem: () => { throw new Error('storage denied'); },
   };
   assert.equal(loadVoicePlaybackVolume(unavailable), 1);
   assert.equal(loadTransmissionPlaybackVolume(unavailable), 1);
+  assert.deepEqual(loadVoiceParticipantVolumes(unavailable), {});
   saveVoicePlaybackVolume(unavailable, 0.2);
   saveTransmissionPlaybackVolume(unavailable, 0.3);
+  saveVoiceParticipantVolumes(unavailable, { alice: 0.4 });
 });
 
-test('applies one selected output device to both playback channels', async () => {
-  const voiceSinkIds: string[] = [];
-  const transmissionSinkIds: string[] = [];
-  const voice = Object.assign({ muted: false, volume: 1 }, { setSinkId: async (sinkId: string) => { voiceSinkIds.push(sinkId); } }) as unknown as HTMLAudioElement;
-  const transmission = Object.assign({ muted: false, volume: 1 }, { setSinkId: async (sinkId: string) => { transmissionSinkIds.push(sinkId); } }) as unknown as HTMLAudioElement;
+
+test('routes each participant voice output and transmission output to the selected device', async () => {
+  const outputs: AudioOutputStub[] = [];
   const session = new MediaSession({
     mediaDevices: { enumerateDevices: async () => [{ kind: 'audiooutput', deviceId: 'speaker-1' }] } as unknown as MediaDevices,
     mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+    audioElementFactory: () => {
+      const output = createAudioOutputStub();
+      outputs.push(output);
+      return output as unknown as HTMLAudioElement;
+    },
   });
-  session.attachOutput(voice, transmission);
+  const transmission = createAudioOutputStub();
+  session.attachTransmissionOutput(transmission as unknown as HTMLAudioElement);
+  session.setVoiceParticipantVolume('alice', 0.4);
+  await session.setVoiceOutput('alice', createAudioStream());
+  await session.setVoiceOutput('bob', createAudioStream());
 
   assert.equal(await session.selectAudioOutput('speaker-1'), 'available');
-  assert.deepEqual(voiceSinkIds, ['speaker-1']);
-  assert.deepEqual(transmissionSinkIds, ['speaker-1']);
+  session.removeVoiceOutput('alice');
+  await session.setVoiceOutput('alice', createAudioStream());
+  assert.equal(outputs.length, 3);
+  assert.equal(outputs[2].volume, 0.4);
+  assert.deepEqual(outputs.map((output) => output.sinkIds), [['speaker-1'], ['speaker-1'], ['speaker-1']]);
+  assert.deepEqual(transmission.sinkIds, ['speaker-1']);
 });
 
 test('retoma a saída suspensa e executa tons curtos de chamada e mensagem', async () => {

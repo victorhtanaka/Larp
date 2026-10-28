@@ -98,3 +98,24 @@ test('definitive peer removal clears audio tracks, stream associations and state
   assert.deepEqual(participants.peerIds, []);
   assert.equal(participants.getPeerState('peer-1'), undefined);
 });
+
+test('media-state mutes one peer and screen cleanup preserves its voice track', () => {
+  const participants = new RemoteAudioParticipants();
+  participants.setPeerState('peer-1', 'connected');
+  const voice = participants.addAudioTrack('peer-1', audioTrack('voice'), []).record;
+  participants.setSource(voice, 'voice');
+  const screen = stream('screen', [videoTrack('screen-video')]);
+  const systemAudio = participants.addAudioTrack('peer-1', audioTrack('system'), [screen]).record;
+  participants.addVideoStreams('peer-1', [screen]);
+  participants.setSource(systemAudio, 'transmission');
+
+  const muted = participants.setVoiceActive('peer-1', false);
+  assert.equal(muted.peerLeft, true);
+  assert.deepEqual(participants.peerIds, []);
+  assert.deepEqual(muted.records.map((record) => record.track.id), ['voice']);
+  assert.deepEqual(participants.removeSource('peer-1', 'transmission').records.map((record) => record.track.id), ['system']);
+  participants.clearVideoStreams('peer-1');
+  assert.deepEqual(participants.records.map((record) => record.track.id), ['voice']);
+  assert.equal(participants.setVoiceActive('peer-1', true).peerJoined, true);
+  assert.deepEqual(participants.peerIds, ['peer-1']);
+});

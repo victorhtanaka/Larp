@@ -93,6 +93,18 @@ export interface SignedConnectRequestEnvelope {
   readonly signature: IdentitySignature;
 }
 
+export interface SignedMediaStateEnvelope {
+  readonly version: typeof WEBRTC_PROTOCOL_VERSION;
+  readonly kind: 'media-state';
+  readonly groupId: string;
+  readonly senderId: string;
+  readonly recipientId: string;
+  readonly media: 'voice' | 'screen';
+  readonly active: boolean;
+  readonly signature: IdentitySignature;
+}
+
+
 export const PROTOCOL_ERROR_CODES = [
   'version-mismatch',
   'malformed-envelope',
@@ -127,6 +139,7 @@ export type SignedProtocolEnvelope =
   | SignedDescriptionEnvelope
   | SignedIceBatchEnvelope
   | SignedConnectRequestEnvelope
+  | SignedMediaStateEnvelope
   | SignedProtocolErrorEnvelope;
 
 export type UnsignedProtocolEnvelope =
@@ -137,7 +150,9 @@ export type UnsignedProtocolEnvelope =
   | Omit<SignedDescriptionEnvelope, 'signature'>
   | Omit<SignedIceBatchEnvelope, 'signature'>
   | Omit<SignedConnectRequestEnvelope, 'signature'>
+  | Omit<SignedMediaStateEnvelope, 'signature'>
   | Omit<SignedProtocolErrorEnvelope, 'signature'>;
+
 
 export interface IdentitySigner {
   readonly participantId: string;
@@ -346,6 +361,14 @@ export function validateProtocolEnvelope(value: unknown): ParsedProtocolEnvelope
         && isId(value.groupId)
         && isId(value.recipientId);
       break;
+    case 'media-state':
+      valid = hasExactKeys(value, ['version', 'kind', 'groupId', 'senderId', 'recipientId', 'media', 'active', 'signature'])
+        && isId(value.groupId)
+        && isId(value.recipientId)
+        && (value.media === 'voice' || value.media === 'screen')
+        && typeof value.active === 'boolean';
+      break;
+
     case 'protocol-error':
       valid = hasExactKeys(value, [
         'version', 'kind', 'groupId', 'senderId', 'recipientId', 'code', 'detail', 'signature',

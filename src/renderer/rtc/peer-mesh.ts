@@ -46,6 +46,7 @@ export interface TurnCredentialServer {
 
 export interface PeerMeshCallbacks extends MessageSyncCallbacks {
   readonly onPeerState?: (peerId: string, status: PeerConnectionStatus) => void;
+  readonly onMediaState?: (peerId: string, media: 'voice' | 'screen', active: boolean) => void;
   readonly onDataChannelState?: (peerId: string, state: RTCDataChannelState) => void;
   readonly onTrack?: (peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) => void;
 }
@@ -202,6 +203,21 @@ export class PeerMesh implements MeshTrackSender {
     this.assertOpen();
     return this.messageSync.publish(message);
   }
+
+  async sendMediaState(peerId: string, media: 'voice' | 'screen', active: boolean): Promise<void> {
+    this.assertOpen();
+    if (peerId === this.options.localParticipantId) throw new Error('Cannot signal media state to the local participant.');
+    await this.sendSignal(peerId, {
+      version: WEBRTC_PROTOCOL_VERSION,
+      kind: 'media-state',
+      groupId: this.options.groupId,
+      senderId: this.options.localParticipantId,
+      recipientId: peerId,
+      media,
+      active,
+    });
+  }
+
 
   attachTrack(peerId: string, track: MediaStreamTrack, stream: MediaStream): void {
     this.assertOpen();
@@ -502,8 +518,8 @@ export class PeerMesh implements MeshTrackSender {
     if (envelope.kind !== 'description'
       && envelope.kind !== 'ice-batch'
       && envelope.kind !== 'connect-request'
-      && envelope.kind !== 'protocol-error') {
-      this.options.callbacks?.onProtocolError?.(transportPeerId, 'malformed-envelope', 'Non-signaling envelope received from signaling transport.');
+      && envelope.kind !== 'protocol-error'
+      && envelope.kind !== 'media-state') {
       return;
     }
     if (envelope.senderId !== transportPeerId
@@ -526,11 +542,17 @@ export class PeerMesh implements MeshTrackSender {
       this.options.callbacks?.onProtocolError?.(transportPeerId, envelope.code, envelope.detail);
       return;
     }
+    if (envelope.kind === 'media-state') {
+      this.options.callbacks?.onMediaState?.(transportPeerId, envelope.media, envelope.active);
+      return;
+    }
     if (!this.peers.has(transportPeerId) && this.peers.size >= MAX_PEER_MESH_SIZE) {
       await this.sendSignalError(transportPeerId, 'peer-limit-exceeded', `Peer mesh is limited to ${MAX_PEER_MESH_SIZE} peers.`);
       return;
     }
     const peer = this.ensurePeer(transportPeerId);
+
+
     if (envelope.kind === 'connect-request') {
       if (!this.ownsDataChannel(transportPeerId)) {
         await this.sendSignalError(transportPeerId, 'malformed-envelope', 'Only the deterministic channel owner may accept a connection request.');

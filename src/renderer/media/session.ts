@@ -1,4 +1,5 @@
 import type { SelectedDisplaySource } from '../../shared/contracts';
+import { normalizePlaybackVolume } from './playback-volume';
 export type MediaDeviceKind = 'audioinput' | 'audiooutput';
 
 export interface MediaDeviceOption {
@@ -35,6 +36,7 @@ export interface MediaSessionOptions {
   displaySourceProvider?: DisplaySourceProvider;
   mesh: MeshTrackSender;
   audioContextFactory?: () => AudioContext;
+  audioElementFactory?: () => HTMLAudioElement;
   onDeviceRemoved?: (deviceId: string) => void;
   onDisplayEnded?: () => void;
 }
@@ -86,6 +88,7 @@ export class MediaSession {
   private readonly displaySourceProvider?: DisplaySourceProvider;
   private readonly mesh: MeshTrackSender;
   private readonly audioContextFactory: () => AudioContext;
+  private readonly audioElementFactory: () => HTMLAudioElement;
   private readonly onDeviceRemoved?: (deviceId: string) => void;
   private readonly onDisplayEnded?: () => void;
   private readonly ownedTracks = new Map<MediaStreamTrack, Set<string>>();
@@ -95,7 +98,8 @@ export class MediaSession {
   private selectedOutputId?: string;
   private microphone?: MediaStream;
   private displayStream?: MediaStream;
-  private voiceOutput?: HTMLAudioElement;
+  private readonly voiceOutputs = new Map<string, HTMLAudioElement>();
+  private readonly voiceParticipantVolumes = new Map<string, number>();
   private transmissionOutput?: HTMLAudioElement;
   private microphoneTestContext?: AudioContext;
   private microphoneTestAnalyser?: AnalyserNode;
@@ -105,6 +109,7 @@ export class MediaSession {
   private toneNodes: AudioScheduledSourceNode[] = [];
   private micMuted = false;
   private playbackMuted = false;
+  private voiceMutedByCall = false;
   private voicePlaybackVolume = 1;
   private transmissionPlaybackVolume = 1;
   private closed = false;
@@ -116,6 +121,7 @@ export class MediaSession {
     this.displaySourceProvider = options.displaySourceProvider;
     this.mesh = options.mesh;
     this.audioContextFactory = options.audioContextFactory ?? (() => new AudioContext());
+    this.audioElementFactory = options.audioElementFactory ?? (() => new Audio());
     this.onDeviceRemoved = options.onDeviceRemoved;
     this.onDisplayEnded = options.onDisplayEnded;
     if (this.mediaDevices && typeof this.mediaDevices.addEventListener === 'function') {
@@ -210,24 +216,90 @@ export class MediaSession {
     }
   }
 
-  attachOutput(voiceElement: HTMLAudioElement, transmissionElement?: HTMLAudioElement): void {
+  attachTransmissionOutput(element: HTMLAudioElement): void {
     if (this.closed) return;
-    this.voiceOutput = voiceElement;
-    this.transmissionOutput = transmissionElement;
-    for (const [element, volume] of [
-      [voiceElement, this.voicePlaybackVolume],
-      ...(transmissionElement ? [[transmissionElement, this.transmissionPlaybackVolume] as const] : []),
-    ] as const) {
-      element.muted = this.playbackMuted;
-      element.volume = volume;
-      if (this.selectedOutputId && typeof element.setSinkId === 'function') {
-        void element.setSinkId(this.selectedOutputId).catch(() => { this.selectedOutputId = undefined; });
+    this.transmissionOutput = element;
+    element.muted = this.playbackMuted;
+    element.volume = this.transmissionPlaybackVolume;
+    this.applyOutputSink(element);
+  }
+
+  setVoiceOutput(userId: string, stream: MediaStream | null): Promise<void> {
+    if (this.closed || !userId) return Promise.resolve();
+    if (!stream) {
+      const output = this.voiceOutputs.get(userId);
+      if (output) {
+        output.pause();
+        output.srcObject = null;
       }
+      return Promise.resolve();
+    }
+    let output = this.voiceOutputs.get(userId);
+    if (!output) {
+      output = this.audioElementFactory();
+      output.autoplay = true;
+      this.voiceOutputs.set(userId, output);
+      this.applyOutputSink(output);
+    }
+    output.srcObject = stream;
+    this.applyVoiceOutput(userId, output);
+    if (!stream.getAudioTracks().some((track) => track.readyState === 'live')) return Promise.resolve();
+    return Promise.resolve().then(() => output.play()).then(() => undefined);
+  }
+
+  removeVoiceOutput(userId: string): void {
+    const output = this.voiceOutputs.get(userId);
+    if (!output) return;
+    output.pause();
+    output.srcObject = null;
+    this.voiceOutputs.delete(userId);
+  }
+
+  private applyVoiceOutput(userId: string, output: HTMLAudioElement): void {
+    const individualVolume = this.voiceParticipantVolumes.get(userId) ?? this.voicePlaybackVolume;
+    output.muted = this.playbackMuted || this.voiceMutedByCall;
+    output.volume = normalizePlaybackVolume(this.voicePlaybackVolume * individualVolume);
+  }
+
+
+  private applyOutputSink(output: HTMLAudioElement): void {
+    if (this.selectedOutputId && typeof output.setSinkId === 'function') {
+      void output.setSinkId(this.selectedOutputId).catch(() => { this.selectedOutputId = undefined; });
     }
   }
 
   private outputElements(): HTMLAudioElement[] {
-    return [this.voiceOutput, this.transmissionOutput].filter((element): element is HTMLAudioElement => Boolean(element));
+    return [...this.voiceOutputs.values(), ...(this.transmissionOutput ? [this.transmissionOutput] : [])];
+  }
+
+  setPlaybackMuted(muted: boolean): void {
+    this.playbackMuted = muted;
+    for (const [userId, output] of this.voiceOutputs) this.applyVoiceOutput(userId, output);
+    if (this.transmissionOutput) this.transmissionOutput.muted = muted;
+  }
+
+  setVoicePlaybackMuted(muted: boolean): void {
+    this.voiceMutedByCall = muted;
+    for (const [userId, output] of this.voiceOutputs) this.applyVoiceOutput(userId, output);
+  }
+
+  setVoicePlaybackVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    this.voicePlaybackVolume = normalizePlaybackVolume(volume);
+    for (const [userId, output] of this.voiceOutputs) this.applyVoiceOutput(userId, output);
+  }
+
+  setVoiceParticipantVolume(userId: string, volume: number): void {
+    if (!userId || !Number.isFinite(volume)) return;
+    this.voiceParticipantVolumes.set(userId, normalizePlaybackVolume(volume));
+    const output = this.voiceOutputs.get(userId);
+    if (output) this.applyVoiceOutput(userId, output);
+  }
+
+  setTransmissionPlaybackVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    this.transmissionPlaybackVolume = normalizePlaybackVolume(volume);
+    if (this.transmissionOutput) this.transmissionOutput.volume = this.transmissionPlaybackVolume;
   }
 
   setMicrophoneMuted(muted: boolean): void {
@@ -235,22 +307,6 @@ export class MediaSession {
     for (const track of this.microphone?.getAudioTracks() ?? []) track.enabled = !muted;
   }
 
-  setPlaybackMuted(muted: boolean): void {
-    this.playbackMuted = muted;
-    for (const output of this.outputElements()) output.muted = muted;
-  }
-
-  setVoicePlaybackVolume(volume: number): void {
-    if (!Number.isFinite(volume)) return;
-    this.voicePlaybackVolume = Math.min(1, Math.max(0, volume));
-    if (this.voiceOutput) this.voiceOutput.volume = this.voicePlaybackVolume;
-  }
-
-  setTransmissionPlaybackVolume(volume: number): void {
-    if (!Number.isFinite(volume)) return;
-    this.transmissionPlaybackVolume = Math.min(1, Math.max(0, volume));
-    if (this.transmissionOutput) this.transmissionOutput.volume = this.transmissionPlaybackVolume;
-  }
 
 
 
@@ -420,7 +476,8 @@ export class MediaSession {
       output.pause();
       output.srcObject = null;
     }
-    this.voiceOutput = undefined;
+    this.voiceOutputs.clear();
+    this.voiceParticipantVolumes.clear();
     this.transmissionOutput = undefined;
     this.deviceListeners.clear();
   }
