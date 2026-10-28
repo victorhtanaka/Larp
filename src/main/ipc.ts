@@ -4,7 +4,6 @@ import type { GroupMember, IdentitySignature } from '../shared/cloud-contracts';
 import { envelopeSigningBytes, parseProtocolEnvelope, validateProtocolEnvelope, MAX_SYNC_RANGE, MAX_SYNC_BATCH_MESSAGES, type SignedChatEnvelope, type SignedAckEnvelope } from '../shared/webrtc-protocol';
 import type { LocalLarpDatabase } from './database';
 import type { LarpRuntime } from './services/runtime';
-import { requireGroupPresenceStatus } from './services/supabase-groups';
 import { listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVITE_CODE = /^[A-Za-z0-9_-]{43}$/;
@@ -307,17 +306,6 @@ export function registerIpcHandlers(
     assertTrustedFrame(event, getMainWindow());
     const groupId = requireUuid(groupValue, 'Grupo');
     presenceSubscriptions.get(event.sender.id)?.get(groupId)?.dispose();
-  });
-  ipcMain.handle('cloud:set-presence', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !('groupId' in input) || !('status' in input)) {
-      throw new TypeError('Dados de presença inválidos.');
-    }
-    await runtime.requireCloud().setRealtimePresence(
-      requireUuid(input.groupId, 'Grupo'),
-      requireGroupPresenceStatus(input.status),
-    );
   });
   ipcMain.handle('cloud:get-cache', (event) => {
     assertTrustedFrame(event, getMainWindow());

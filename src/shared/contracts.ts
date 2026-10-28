@@ -52,7 +52,6 @@ export interface LarpBridge {
     onPresence: (presence: Record<string, GroupPresenceStatus>, ready: boolean) => void,
     onError: (message: string) => void,
   ): () => void;
-  setCloudPresence(groupId: string, status: GroupPresenceStatus): Promise<void>;
   getTurnServers(groupId: string): Promise<readonly TurnCredentialServer[]>;
   getCachedCloudGroups(): Promise<GroupSummary[]>;
   getCachedCloudMembers(groupId: string): Promise<GroupMember[]>;

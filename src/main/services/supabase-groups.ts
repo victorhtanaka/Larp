@@ -29,14 +29,9 @@ interface SignalChannelState {
   memberIds: Set<string>;
   activeSends: number;
   presenceTracked: boolean;
-  presenceStatus: GroupPresenceStatus;
   presenceReady: boolean;
 }
 
-export function requireGroupPresenceStatus(value: unknown): GroupPresenceStatus {
-  if (value !== 'online' && value !== 'away') throw new TypeError('Invalid group presence status.');
-  return value;
-}
 
 export function groupPresenceFromSnapshot(
   snapshot: unknown,
@@ -536,7 +531,7 @@ export class SupabaseGroupsService {
     state.presenceErrorListeners.add(onError);
     if (wasEmpty) {
       try {
-        await this.trackPresence(state, 'online');
+        await this.trackPresence(state);
       } catch (error) {
         state.presenceListeners.delete(listener);
         state.presenceErrorListeners.delete(onError);
@@ -565,11 +560,6 @@ export class SupabaseGroupsService {
     };
   }
 
-  async setRealtimePresence(groupId: string, rawStatus: unknown): Promise<void> {
-    const status = requireGroupPresenceStatus(rawStatus);
-    const state = await this.ensureSignalChannel(groupId);
-    await this.trackPresence(state, status);
-  }
 
   async sendRealtimeSignal(groupId: string, rawEnvelope: unknown): Promise<void> {
     this.requireSignIn();
@@ -661,7 +651,6 @@ export class SupabaseGroupsService {
       memberIds,
       activeSends: 0,
       presenceTracked: false,
-      presenceStatus: 'online',
       presenceReady: false,
     };
     channel.on('broadcast', { event: REALTIME_SIGNAL_EVENT }, ({ payload }) => {
@@ -702,7 +691,7 @@ export class SupabaseGroupsService {
         clearTimeout(openingTimer);
         resolveOpening();
       } else if (status === 'SUBSCRIBED' && state.presenceTracked) {
-        void this.trackPresence(state, state.presenceStatus).catch((cause: unknown) => {
+        void this.trackPresence(state).catch((cause: unknown) => {
           state.presenceReady = false;
           this.emitPresence(state);
           const message = cause instanceof Error ? cause.message : 'Could not restore cloud presence.';
@@ -747,14 +736,13 @@ export class SupabaseGroupsService {
     for (const listener of state.presenceListeners) listener(presence, state.presenceReady);
   }
 
-  private async trackPresence(state: SignalChannelState, status: GroupPresenceStatus): Promise<void> {
+  private async trackPresence(state: SignalChannelState): Promise<void> {
     this.requireSignIn();
     const userId = this.signedInUserId;
     if (!userId || !state.memberIds.has(userId)) throw new Error('Presence tracking requires group membership.');
-    const result = await state.channel.track({ userId, status });
+    const result = await state.channel.track({ userId, status: 'online' });
     if (result !== 'ok') throw new Error('Supabase did not confirm group presence tracking.');
     state.presenceTracked = true;
-    state.presenceStatus = status;
   }
 
   private requireSignIn(): void {

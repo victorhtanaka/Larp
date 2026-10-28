@@ -8,7 +8,7 @@ import type { PeerMesh, PeerConnectionStatus } from './rtc/peer-mesh';
 import { useMediaController } from './media/use-media-controller';
 import { connectionPresentation } from './presentation';
 import { notificationsReducer, type AppNotification } from './notifications';
-import { resolveLocalPresenceStatus, resolveMemberPresence, type MemberPresenceStatus } from './presence';
+import { resolveMemberPresence, type MemberPresenceStatus } from './presence';
 import larpWordmarkUrl from '../assets/larp-wordmark.png';
 
 const INITIAL_CLOUD_STATUS: CloudConnectionStatus = {
@@ -566,74 +566,24 @@ function App() {
     }
 
     let active = true;
-    let channelReady = false;
-    let currentStatus: GroupPresenceStatus = 'online';
-    let lastActivity = Date.now();
     setPresenceByUserId({});
     setPresenceReady(false);
     setLocalPresenceStatus('online');
 
-    const publish = (status: GroupPresenceStatus) => {
-      if (!active || currentStatus === status) return;
-      currentStatus = status;
-      setLocalPresenceStatus(status);
-      if (channelReady) {
-        void window.larp.setCloudPresence(groupId, status).catch(() => {
-          if (active) {
-            channelReady = false;
-            setPresenceReady(false);
-          }
-        });
-      }
-    };
-    const onActivity = () => {
-      lastActivity = Date.now();
-      if (document.visibilityState === 'visible' && document.hasFocus()) publish('online');
-    };
-    const refreshPresence = () => publish(resolveLocalPresenceStatus(
-      document.visibilityState === 'visible',
-      document.hasFocus(),
-      lastActivity,
-      Date.now(),
-    ));
     const unsubscribe = window.larp.subscribeCloudPresence(
       groupId,
       (presence, ready) => {
         if (!active) return;
         setPresenceByUserId(presence);
         setPresenceReady(ready);
-        if (ready && !channelReady && currentStatus !== 'online') {
-          void window.larp.setCloudPresence(groupId, currentStatus).catch(() => {
-            if (active) {
-              channelReady = false;
-              setPresenceReady(false);
-            }
-          });
-        }
-        channelReady = ready;
       },
       () => {
-        if (active) {
-          channelReady = false;
-          setPresenceReady(false);
-        }
+        if (active) setPresenceReady(false);
       },
     );
-    const activityEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
-    for (const event of activityEvents) document.addEventListener(event, onActivity, { passive: true });
-    window.addEventListener('focus', onActivity);
-    window.addEventListener('blur', refreshPresence);
-    document.addEventListener('visibilitychange', refreshPresence);
-    const timer = window.setInterval(refreshPresence, 15_000);
-    refreshPresence();
 
     return () => {
       active = false;
-      window.clearInterval(timer);
-      for (const event of activityEvents) document.removeEventListener(event, onActivity);
-      window.removeEventListener('focus', onActivity);
-      window.removeEventListener('blur', refreshPresence);
-      document.removeEventListener('visibilitychange', refreshPresence);
       unsubscribe();
     };
   }, [activeCloudGroup?.id, localCloudUserId, memberGroupId, memberLoading]);

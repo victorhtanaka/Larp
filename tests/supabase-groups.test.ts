@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { groupPresenceFromSnapshot, requireGroupPresenceStatus, SupabaseGroupsService } from '../src/main/services/supabase-groups';
+import { groupPresenceFromSnapshot, SupabaseGroupsService } from '../src/main/services/supabase-groups';
 
 interface ProfileRow {
   user_id: string;
@@ -127,13 +127,56 @@ test('profile save inserts new rows and updates existing rows without UPDATE on 
   assert.equal(rows.get(userId)?.display_name, 'Ana Costa');
 });
 
-test('presence status accepts only online and away', () => {
-  assert.equal(requireGroupPresenceStatus('online'), 'online');
-  assert.equal(requireGroupPresenceStatus('away'), 'away');
-  for (const invalid of ['offline', 'ONLINE', '', null, undefined, 1, {}]) {
-    assert.throws(() => requireGroupPresenceStatus(invalid), TypeError);
-  }
+test('tracks group presence online after subscription and reconnect', async () => {
+  const userId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+  const groupId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+  const tracked: unknown[] = [];
+  let onSubscribe: ((status: string) => void) | undefined;
+  const channel = {
+    on: () => channel,
+    subscribe: (listener: (status: string) => void) => {
+      onSubscribe = listener;
+      listener('SUBSCRIBED');
+      return channel;
+    },
+    track: async (payload: unknown) => {
+      tracked.push(payload);
+      return 'ok';
+    },
+    presenceState: () => ({}),
+    untrack: async () => 'ok',
+  };
+  const client = {
+    auth: {
+      getSession: async () => ({ data: { session: { user: { id: userId } } }, error: null }),
+    },
+    rpc: async (name: string) => name === 'list_group_members'
+      ? {
+        data: [{ user_id: userId, public_key: 'test-public-key', joined_at: '2026-01-01T00:00:00.000Z', role: 'owner' }],
+        error: null,
+      }
+      : { data: null, error: null },
+    from: () => ({ select: () => ({ in: async () => ({ data: [], error: null }) }) }),
+    channel: () => channel,
+    removeChannel: async () => 'ok',
+  } as unknown as SupabaseClient;
+  const service = new SupabaseGroupsService(client, 'test-public-key');
+  await service.signInAnonymously();
+
+  const unsubscribe = await service.subscribeRealtimePresence(groupId, () => undefined, () => {
+    assert.fail('presence subscription should not report an error');
+  });
+  const onlinePayload = { userId, status: 'online' };
+  assert.deepEqual(tracked, [onlinePayload]);
+
+  assert.ok(onSubscribe);
+  onSubscribe('SUBSCRIBED');
+  await Promise.resolve();
+  assert.deepEqual(tracked, [onlinePayload, onlinePayload]);
+
+  await unsubscribe();
 });
+
 
 test('presence snapshots aggregate sessions and filter untrusted or non-member entries', () => {
   const memberId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';

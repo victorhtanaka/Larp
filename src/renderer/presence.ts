@@ -1,7 +1,6 @@
 import type { GroupPresenceStatus } from '../shared/cloud-contracts';
 
 export type MemberPresenceStatus = GroupPresenceStatus | 'offline';
-export const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 export function resolveMemberPresence(
   memberId: string,
@@ -15,11 +14,3 @@ export function resolveMemberPresence(
   return sharedStatusByUserId[memberId] ?? 'offline';
 }
 
-export function resolveLocalPresenceStatus(
-  visible: boolean,
-  focused: boolean,
-  lastActivityAt: number,
-  now: number,
-): GroupPresenceStatus {
-  return visible && focused && now - lastActivityAt < PRESENCE_IDLE_TIMEOUT_MS ? 'online' : 'away';
-}

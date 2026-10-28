@@ -68,7 +68,6 @@ const bridge: LarpBridge = {
       void subscription.then(() => ipcRenderer.invoke('cloud:unsubscribe-presence', groupId)).catch(() => undefined);
     };
   },
-  setCloudPresence: (groupId, status) => ipcRenderer.invoke('cloud:set-presence', { groupId, status }),
   getTurnServers: (groupId) => ipcRenderer.invoke('cloud:get-turn-servers', groupId),
   listDisplaySources: () => ipcRenderer.invoke('display:list-sources'),
   prepareDisplayCapture: (sourceId, includeSystemAudio) =>
