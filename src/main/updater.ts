@@ -7,7 +7,7 @@ import { getAppIconPath } from './app-icon';
 declare const UPDATER_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const UPDATER_WINDOW_VITE_NAME: string;
 
-const updateFeedBaseUrl = 'https://update.electronjs.org/victorhtanaka/Larp/win32-x64';
+const updateFeedUrl = 'https://github.com/victorhtanaka/Larp/releases/latest/download/RELEASES';
 const checkTimeoutMs = 30_000;
 const downloadTimeoutMs = 15 * 60_000;
 const errorContinueDelayMs = 6_000;
@@ -96,7 +96,7 @@ export function runStartupUpdater(): Promise<boolean> {
   startupUpdaterWindow = window;
 
   try {
-    autoUpdater.setFeedURL({ url: `${updateFeedBaseUrl}/${app.getVersion()}/RELEASES` });
+    autoUpdater.setFeedURL({ url: updateFeedUrl });
   } catch (error) {
     console.error('Não foi possível configurar a origem de atualizações:', error);
     closeStartupUpdater();
