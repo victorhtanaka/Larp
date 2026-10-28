@@ -330,6 +330,9 @@ export class MediaSession {
         stream.getTracks().forEach((track) => track.stop());
         return { state: 'device-unavailable', error: 'A captura de áudio do sistema não está disponível nesta sessão.' };
       }
+      for (const track of stream.getAudioTracks()) {
+        if ('contentHint' in track) track.contentHint = 'music';
+      }
       this.displayStream = stream;
       this.ownStream(stream);
       for (const track of stream.getVideoTracks()) {

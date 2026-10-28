@@ -59,7 +59,7 @@ O histórico ausente é solicitado em faixas e lotes limitados. Cada participant
 
 ## Voz, tela e qualidade
 
-A voz usa `getUserMedia`, Opus quando compatível e cancelamento de eco. A supressão nativa de ruído pode ser ligada ou desligada; o Chromium e o microfone definem sua intensidade automaticamente. A preferência fica salva neste PC. Cada transmissor de áudio — microfone e áudio de sistema da tela — recebe teto de envio de 96 kb/s; isso não substitui o controle de congestionamento do WebRTC nem garante taxa constante. Captura de áudio só é permitida na janela principal e por solicitação explícita.
+Voz usa `getUserMedia`, Opus quando compatível e cancelamento de eco. A supressão nativa de ruído pode ser ligada ou desligada; o Chromium e o microfone definem sua intensidade automaticamente. A preferência fica salva neste PC. O sender de voz tem teto de 96 kb/s; o áudio de sistema da tela tem teto de 192 kb/s por peer, sem taxa mínima, e mantém o controle de congestionamento do WebRTC. A captura de sistema prefere dois canais (`ideal: 2`) e marca suas faixas de áudio como `music`, sem aplicar processamento de voz; se a origem só oferecer mono, ela continua utilizável. Captura de áudio só é permitida na janela principal e por solicitação explícita.
 
 Cada participante remoto tem um elemento de saída de voz próprio; o áudio da tela usa uma saída distinta. Todos os elementos de voz e transmissão seguem a saída selecionada. O mudo global afeta ambas as classes; sair da chamada silencia somente a voz e não interrompe o áudio da tela. O volume global da voz multiplica o volume individual do participante. O controle individual começa no nível global e fica salvo por ID localmente; o volume da transmissão também tem controle e persistência próprios.
 

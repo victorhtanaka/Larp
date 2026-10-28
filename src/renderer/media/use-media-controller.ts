@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SelectedDisplaySource } from '../../shared/contracts';
-import { MediaQualityController, type VideoContentPreference } from './quality';
+import { MediaQualityController, type AudioSenderProfile, type VideoContentPreference } from './quality';
 import { MediaSession, supportsNoiseSuppression, type MediaDeviceOption } from './session';
 import type { PeerConnectionStatus, PeerMesh } from '../rtc/peer-mesh';
 import {
@@ -271,7 +271,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           await window.larp.prepareDisplayCapture(source.id, options.audio);
           return navigator.mediaDevices.getDisplayMedia({
             video: { frameRate: { ideal: 60, max: 60 } },
-            audio: options.audio,
+            audio: options.audio ? { channelCount: { ideal: 2 } } : false,
           });
         },
       },
@@ -543,7 +543,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     if (stream) void video.play().catch(() => setShareError('A prévia de vídeo não pôde ser iniciada.'));
   }, [displayStream, remoteVideoStream]);
 
-  const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack) => {
+  const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack, profile: AudioSenderProfile) => {
     if (!mesh) return;
     const item = mesh.getMediaSenders().find((candidate) => candidate.peerId === peerId && candidate.sender.track === track);
     if (!item) return;
@@ -562,7 +562,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     }
     if (track.kind === 'audio') {
       try {
-        await controller.configureAudioSender(sender);
+        await controller.configureAudioSender(sender, profile);
       } catch {
         // Keep the browser's default congestion-controlled audio parameters.
       }
@@ -572,6 +572,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const attachStreamToPeer = useCallback(async (
     peerId: string,
     stream: MediaStream,
+    profile: AudioSenderProfile,
     session = sessionRef.current,
     isOperationCurrent?: () => boolean,
   ) => {
@@ -594,7 +595,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
         await session.detachTrack(peerId, track);
         return false;
       }
-      await configureCodecPreference(peerId, track);
+      await configureCodecPreference(peerId, track, profile);
       if (!isCurrent()) {
         await session.detachTrack(peerId, track);
         return false;
@@ -647,7 +648,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     for (const peerId of connectedPeerIds) {
       const microphone = callActive ? microphoneStreamRef.current : null;
       if (microphone) {
-        void attachStreamToPeer(peerId, microphone).then((attached) => {
+        void attachStreamToPeer(peerId, microphone, 'voice').then((attached) => {
           if (current && attached) signalMediaState(peerId, 'voice', true);
         }).catch(() => {
           if (current) setAudioError('Não foi possível compartilhar o áudio com o participante.');
@@ -655,7 +656,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
       }
       const display = shareActive ? displayStreamRef.current : null;
       if (display) {
-        void attachStreamToPeer(peerId, display).then((attached) => {
+        void attachStreamToPeer(peerId, display, 'transmission').then((attached) => {
           if (current && attached) signalMediaState(peerId, 'screen', true);
         }).catch(() => {
           if (current) setAudioError('Não foi possível compartilhar o áudio com o participante.');
@@ -950,7 +951,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           return false;
         }
         attachedPeerIds.add(peerId);
-        if (!await attachStreamToPeer(peerId, stream, session, isOperationCurrent)) {
+        if (!await attachStreamToPeer(peerId, stream, 'voice', session, isOperationCurrent)) {
           await rollback();
           return false;
         }
@@ -1157,7 +1158,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           return false;
         }
         attachedPeerIds.add(peerId);
-        if (!await attachStreamToPeer(peerId, stream, session, isOperationCurrent)) {
+        if (!await attachStreamToPeer(peerId, stream, 'transmission', session, isOperationCurrent)) {
           await rollback();
           return false;
         }

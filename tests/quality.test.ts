@@ -55,19 +55,19 @@ test('limita bitrate pela rota medida e reduz FPS quando o codificador informa p
   assert.equal(constrained.parameters.encodings?.[0]?.scaleResolutionDownBy, 1.5);
   assert.equal(other.parameters.encodings?.[0]?.maxFramerate, 30);
 });
-test('limita o envio de áudio de microfone e tela a 96 kb/s sem alterar vídeo', async () => {
+test('aplica tetos de bitrate distintos para voz e transmissão sem alterar vídeo', async () => {
   const controller = new MediaQualityController();
   const microphone = createSender('audio');
-  const screenAudio = createSender('audio', 128_000);
+  const screenAudio = createSender('audio', 256_000);
   const video = createSender('video');
 
-  assert.equal(await controller.configureAudioSender(microphone.sender), true);
+  assert.equal(await controller.configureAudioSender(microphone.sender, 'voice'), true);
   assert.equal(microphone.parameters.encodings?.[0]?.maxBitrate, 96_000);
   assert.equal(microphone.setCalls, 1);
-  assert.equal(await controller.configureAudioSender(screenAudio.sender), true);
-  assert.equal(screenAudio.parameters.encodings?.[0]?.maxBitrate, 96_000);
+  assert.equal(await controller.configureAudioSender(screenAudio.sender, 'transmission'), true);
+  assert.equal(screenAudio.parameters.encodings?.[0]?.maxBitrate, 192_000);
   assert.equal(screenAudio.setCalls, 1);
-  assert.equal(await controller.configureAudioSender(video.sender), false);
+  assert.equal(await controller.configureAudioSender(video.sender, 'voice'), false);
   assert.equal(video.setCalls, 0);
 });
 

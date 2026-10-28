@@ -1,7 +1,7 @@
 {
   "name": "larp",
   "productName": "Larp",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Chat privado de voz e compartilhamento de tela para Windows",
   "main": ".vite/build/main.cjs",
   "private": true,

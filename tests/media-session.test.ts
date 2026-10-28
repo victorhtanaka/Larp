@@ -94,6 +94,32 @@ test('threads noise suppression through permission and selected microphone const
     await session.close();
   }
 });
+test('marca o áudio da captura de tela como música e preserva a dica de vídeo', async () => {
+  const videoTrack = Object.assign(new EventTarget(), { readyState: 'live', contentHint: '', stop: () => undefined }) as unknown as MediaStreamTrack;
+  const audioTrack = Object.assign(new EventTarget(), { readyState: 'live', contentHint: '', stop: () => undefined }) as unknown as MediaStreamTrack;
+  const stream = {
+    getTracks: () => [videoTrack, audioTrack],
+    getVideoTracks: () => [videoTrack],
+    getAudioTracks: () => [audioTrack],
+  } as unknown as MediaStream;
+  const session = new MediaSession({
+    mediaDevices: {} as MediaDevices,
+    displaySourceProvider: {
+      listSources: async () => [{ id: 'screen-1', name: 'Screen', kind: 'screen' }],
+      capture: async () => stream,
+    },
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  try {
+    const capture = await session.startDisplayShare({ id: 'screen-1', name: 'Screen', kind: 'screen' }, { audio: true });
+    assert.equal(capture.state, 'active');
+    assert.equal(audioTrack.contentHint, 'music');
+    assert.equal(videoTrack.contentHint, 'detail');
+  } finally {
+    await session.close();
+  }
+});
 
 test('composes master and per-participant voice gains while keeping call mute separate from output mute', async () => {
   const voiceOutputs: AudioOutputStub[] = [];

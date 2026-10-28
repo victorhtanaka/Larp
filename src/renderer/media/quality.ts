@@ -1,4 +1,5 @@
 export type VideoContentPreference = 'motion' | 'text';
+export type AudioSenderProfile = 'voice' | 'transmission';
 export type CpuPressure = 'low' | 'moderate' | 'high' | 'critical' | 'unknown';
 
 export interface QualityPeer {
@@ -44,7 +45,7 @@ export interface PeerMediaStats {
 const unavailable = <T>(): Metric<T> => ({ value: null, source: 'unavailable' });
 const measured = <T>(value: T): Metric<T> => ({ value, source: 'measured' });
 const incoming = <T>(value: T | null): Metric<T> => ({ value, source: value === null ? 'unavailable' : 'incoming' });
-const AUDIO_MAX_BITRATE_BPS = 96_000;
+const AUDIO_MAX_BITRATE_BPS: Record<AudioSenderProfile, number> = { voice: 96_000, transmission: 192_000 };
 const cpuScale: Record<CpuPressure, number> = { low: 1, moderate: 0.78, high: 0.52, critical: 0.3, unknown: 1 };
 
 /** Allocates video budgets; voice sender caps are configured independently. */
@@ -144,14 +145,15 @@ export class MediaQualityController {
     return true;
   }
   /** Sets an audio ceiling while leaving WebRTC's congestion control in charge. */
-  async configureAudioSender(sender: RTCRtpSender): Promise<boolean> {
+  async configureAudioSender(sender: RTCRtpSender, profile: AudioSenderProfile): Promise<boolean> {
     if (sender.track?.kind !== 'audio') return false;
+    const maxBitrate = AUDIO_MAX_BITRATE_BPS[profile];
     const parameters = sender.getParameters();
     if (parameters.encodings.length === 0) return false;
     let changed = false;
     for (const encoding of parameters.encodings) {
-      if (encoding.maxBitrate !== undefined && encoding.maxBitrate <= AUDIO_MAX_BITRATE_BPS) continue;
-      encoding.maxBitrate = AUDIO_MAX_BITRATE_BPS;
+      if (encoding.maxBitrate !== undefined && encoding.maxBitrate <= maxBitrate) continue;
+      encoding.maxBitrate = maxBitrate;
       changed = true;
     }
     if (!changed) return false;
