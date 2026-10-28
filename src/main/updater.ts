@@ -7,7 +7,7 @@ import { getAppIconPath } from './app-icon';
 declare const UPDATER_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const UPDATER_WINDOW_VITE_NAME: string;
 
-const updateFeedUrl = 'https://github.com/victorhtanaka/Larp/releases/latest/download/RELEASES';
+const updateFeedUrl = 'https://github.com/victorhtanaka/Larp/releases/latest/download';
 const checkTimeoutMs = 30_000;
 const downloadTimeoutMs = 15 * 60_000;
 const errorContinueDelayMs = 6_000;
