@@ -271,7 +271,12 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           await window.larp.prepareDisplayCapture(source.id, options.audio);
           return navigator.mediaDevices.getDisplayMedia({
             video: { frameRate: { ideal: 60, max: 60 } },
-            audio: options.audio ? { channelCount: { ideal: 2 } } : false,
+            audio: options.audio ? {
+              channelCount: { ideal: 2 },
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            } : false,
           });
         },
       },
