@@ -276,7 +276,9 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
               echoCancellation: false,
               noiseSuppression: false,
               autoGainControl: false,
-            } : false,
+              restrictOwnAudio: true,
+              suppressLocalAudioPlayback: false,
+            } as MediaTrackConstraints : false,
           });
         },
       },
