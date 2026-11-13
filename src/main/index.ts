@@ -4,9 +4,12 @@ import { constants } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createLarpDatabase, type LocalLarpDatabase } from './database';
+import { createNativeCore, type NativeCoreClient } from './native-core';
 import { registerIpcHandlers } from './ipc';
-import { createLarpRuntime } from './services/runtime';
+import { createNativeHostCall } from './native-host-calls';
+import { handleSecretsCall } from './platform-secrets';
+import { loadSupabaseClientConfiguration } from './supabase-config';
+import { createSupabaseTransport, type SupabaseTransport } from './supabase-transport';
 import { clearDesktopDisplayCapture, consumeDesktopDisplayCapture, hasPreparedDesktopDisplayCapture } from './display-capture';
 import { closeStartupUpdater, runStartupUpdater } from './updater';
 import { getAppIconPath } from './app-icon';
@@ -15,11 +18,15 @@ declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 let mainWindow: BrowserWindow | null = null;
-let database: LocalLarpDatabase | null = null;
+let nativeCore: NativeCoreClient | null = null;
+let supabaseTransport: SupabaseTransport | undefined;
+let routeNativeCoreEvent = (_eventJson: string): void => {};
 let isAppStarting = true;
 let startupFailureReported = false;
+let nativeCoreShutdown: Promise<void> | undefined;
 const appUserModelId = 'com.squirrel.Larp.Larp';
 app.setAppUserModelId(appUserModelId);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!app.isPackaged) {
   app.setPath('userData', join(app.getPath('appData'), 'Larp-dev'));
@@ -51,7 +58,7 @@ async function installPackagedCloudConfig(userDataPath: string): Promise<void> {
 }
 
 function createWindow(): void {
-  if (!database) throw new Error('Banco local ainda não foi inicializado.');
+  if (!nativeCore) throw new Error('Banco local ainda não foi inicializado.');
 
   const window = new BrowserWindow({
     width: 1440,
@@ -108,7 +115,7 @@ function createWindow(): void {
   });
 }
 
-if (!squirrelStartup) app.whenReady().then(async () => {
+if (!squirrelStartup && hasSingleInstanceLock) app.whenReady().then(async () => {
   const shouldStartApp = await runStartupUpdater();
   if (!shouldStartApp) return;
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -148,23 +155,50 @@ if (!squirrelStartup) app.whenReady().then(async () => {
     })().catch(() => callback(null));
   });
   const userDataPath = app.getPath('userData');
-  database = createLarpDatabase(join(userDataPath, 'larp.sqlite'));
   await installPackagedCloudConfig(userDataPath);
-  const runtime = await createLarpRuntime(userDataPath);
-  registerIpcHandlers(database, () => mainWindow, runtime);
+  const configuration = await loadSupabaseClientConfiguration(join(userDataPath, 'config.json'));
+  const cloudConfig = configuration.status === 'configured'
+    ? { url: configuration.url, anonKey: configuration.anonKey }
+    : null;
+  const hostCall = createNativeHostCall({ secrets: handleSecretsCall, cloud: () => supabaseTransport });
+  const core = await createNativeCore(userDataPath, cloudConfig, hostCall, (eventJson) => routeNativeCoreEvent(eventJson));
+  nativeCore = core;
+  if (cloudConfig) {
+    supabaseTransport = createSupabaseTransport(
+      cloudConfig.url,
+      cloudConfig.anonKey,
+      (subscriptionId, epoch, eventJson) => core.ingestCloudEvent(subscriptionId, epoch, eventJson),
+    );
+  }
+  routeNativeCoreEvent = registerIpcHandlers(core, () => mainWindow);
   createWindow();
   isAppStarting = false;
-  void runtime.refreshCloud();
+  void core.request({ version: 1, op: 'refreshCloud', payload: {} }).catch((error: unknown) => {
+    console.error('Não foi possível atualizar o estado cloud:', error);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 }).catch(reportStartupFailure);
 
-app.on('before-quit', () => {
-  database?.close();
-  database = null;
+app.on('before-quit', (event) => {
+  if (nativeCoreShutdown) {
+    event.preventDefault();
+    return;
+  }
+  if (!nativeCore) return;
+  event.preventDefault();
+  const closingCore = nativeCore;
+  nativeCore = null;
+  nativeCoreShutdown = closingCore.close()
+    .catch((error: unknown) => { console.error('Não foi possível fechar o núcleo nativo:', error); })
+    .finally(() => {
+      nativeCoreShutdown = undefined;
+      app.quit();
+    });
 });
+if (!hasSingleInstanceLock) app.quit();
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && !isAppStarting) app.quit();

@@ -85,6 +85,7 @@ export interface NewChatMessage {
 export class MessageSynchronizer {
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly settledThrough = new Map<string, number>();
+  private readonly stalledSyncRetryThrough = new Map<string, number>();
   private readonly waitingByAuthor = new Map<string, Map<number, QueuedMessage>>();
   private readonly contiguousSequenceByAuthor = new Map<string, number>();
   private readonly highestObservedSequenceByAuthor = new Map<string, number>();
@@ -224,6 +225,7 @@ export class MessageSynchronizer {
           if (sequence <= contiguousSequence) waiting.delete(sequence);
         }
       }
+      this.stalledSyncRetryThrough.delete(this.scopeKey(peerId, authorId));
       this.settledThrough.delete(this.scopeKey(peerId, authorId));
       const throughSequence = Math.min(Number.MAX_SAFE_INTEGER, contiguousSequence + MAX_SYNC_RANGE);
       await this.requestMissing(authorId, peerId, throughSequence, true);
@@ -237,6 +239,9 @@ export class MessageSynchronizer {
     const prefix = `${peerId}\u0000`;
     for (const key of this.settledThrough.keys()) {
       if (key.startsWith(prefix)) this.settledThrough.delete(key);
+    }
+    for (const key of this.stalledSyncRetryThrough.keys()) {
+      if (key.startsWith(prefix)) this.stalledSyncRetryThrough.delete(key);
     }
   }
 
@@ -264,6 +269,7 @@ export class MessageSynchronizer {
       const connectedPeers = this.options.getPeerIds();
       for (const connectedPeerId of connectedPeers) {
         this.settledThrough.delete(this.scopeKey(connectedPeerId, message.senderId));
+        this.stalledSyncRetryThrough.delete(this.scopeKey(connectedPeerId, message.senderId));
       }
       await Promise.all(connectedPeers.filter((connectedPeerId) => connectedPeerId !== peerId).map(async (connectedPeerId) => {
         try {
@@ -328,6 +334,7 @@ export class MessageSynchronizer {
     peerId?: string,
     targetThrough?: number,
     continueWindow = false,
+    retryPeerId?: string,
   ): Promise<void> {
     const afterSequence = this.contiguousSequenceByAuthor.get(authorId) ?? 0;
     const highestObservedSequence = this.highestObservedSequenceByAuthor.get(authorId) ?? 0;
@@ -339,6 +346,8 @@ export class MessageSynchronizer {
       if (participantId === this.options.localParticipantId) return;
       const scope = this.scopeKey(participantId, authorId);
       const settled = this.settledThrough.get(scope) ?? 0;
+      const stalledThrough = this.stalledSyncRetryThrough.get(scope) ?? 0;
+      if (targetThrough === undefined && participantId !== retryPeerId && stalledThrough >= throughSequence) return;
       if (targetThrough === undefined && settled >= throughSequence) return;
       if ([...this.pendingRequests.values()].some((request) => request.peerId === participantId && request.authorId === authorId)) return;
       const requestAfter = Math.max(afterSequence, settled);
@@ -468,6 +477,7 @@ export class MessageSynchronizer {
       await this.reject(peerId, 'malformed-envelope', 'Sync batch does not match an outstanding request.');
       return;
     }
+    const contiguousBefore = this.contiguousSequenceByAuthor.get(batch.authorId) ?? 0;
     for (const message of batch.messages) {
       const publicKey = await this.options.getMemberPublicKey(message.groupId, message.senderId);
       if (!publicKey
@@ -483,9 +493,28 @@ export class MessageSynchronizer {
     } finally {
       this.pendingRequests.delete(batch.requestId);
     }
+    let retryPeerId: string | undefined;
     if (batch.complete) {
       const scope = this.scopeKey(peerId, batch.authorId);
-      this.settledThrough.set(scope, Math.max(this.settledThrough.get(scope) ?? 0, batch.throughSequence));
+      const contiguousSequence = this.contiguousSequenceByAuthor.get(batch.authorId) ?? 0;
+      const highestObservedSequence = this.highestObservedSequenceByAuthor.get(batch.authorId) ?? 0;
+      const unresolvedGap = highestObservedSequence > contiguousSequence + 1
+        && batch.throughSequence > contiguousSequence;
+      if (unresolvedGap) {
+        this.settledThrough.delete(scope);
+        if (contiguousSequence > contiguousBefore) {
+          this.stalledSyncRetryThrough.delete(scope);
+        } else {
+          const retryThrough = this.stalledSyncRetryThrough.get(scope) ?? 0;
+          if (retryThrough < batch.throughSequence) {
+            this.stalledSyncRetryThrough.set(scope, batch.throughSequence);
+            retryPeerId = peerId;
+          }
+        }
+      } else {
+        this.settledThrough.set(scope, Math.max(this.settledThrough.get(scope) ?? 0, batch.throughSequence));
+        if (batch.messages.length > 0) this.stalledSyncRetryThrough.delete(scope);
+      }
       const lastSequence = batch.messages[batch.messages.length - 1]?.sequence;
       if (pending.continueWindow
         && lastSequence === batch.throughSequence
@@ -507,7 +536,7 @@ export class MessageSynchronizer {
         pending.continueWindow,
       );
     }
-    await this.requestMissing(batch.authorId);
+    await this.requestMissing(batch.authorId, undefined, undefined, false, retryPeerId);
   }
 
   private async requestNextBatch(

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
-import { MAX_ENVELOPE_BYTES, parseProtocolEnvelope, type SignedAckEnvelope, type SignedChatEnvelope } from '../shared/webrtc-protocol';
-import type { IncomingMessageResult, LocalMessageStore } from '../renderer/rtc/message-sync';
+import { parseProtocolEnvelope, serializeStoredEnvelope, type SignedAckEnvelope, type SignedChatEnvelope } from '../src/shared/webrtc-protocol';
+import type { IncomingMessageResult, LocalMessageStore } from '../src/renderer/rtc/message-sync';
 
 type StoredMessage = { envelope_json: string; sequence: number };
 type StoredAck = { envelope_json: string };
@@ -8,44 +8,6 @@ type StoredAck = { envelope_json: string };
 const encoder = new TextEncoder();
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
-function serializeEnvelope(value: unknown, kind: 'chat' | 'ack'): string {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    throw new TypeError('Invalid signed message envelope.');
-  }
-  if (typeof serialized !== 'string' || encoder.encode(serialized).byteLength > MAX_ENVELOPE_BYTES) {
-    throw new TypeError('Signed message envelope exceeds the permitted size.');
-  }
-  const parsed = parseProtocolEnvelope(serialized);
-  if (!parsed.ok || parsed.envelope.kind !== kind) {
-    throw new TypeError('Invalid signed message envelope.');
-  }
-  const envelope = parsed.envelope;
-  const canonical = envelope.kind === 'chat'
-    ? {
-      version: envelope.version,
-      kind: envelope.kind,
-      groupId: envelope.groupId,
-      senderId: envelope.senderId,
-      messageId: envelope.messageId,
-      sequence: envelope.sequence,
-      content: envelope.content,
-      createdAt: envelope.createdAt,
-      signature: envelope.signature,
-    }
-    : {
-      version: envelope.version,
-      kind: envelope.kind,
-      groupId: envelope.groupId,
-      senderId: envelope.senderId,
-      messageId: envelope.messageId,
-      sequence: envelope.sequence,
-      signature: envelope.signature,
-    };
-  return JSON.stringify(canonical);
-}
 
 function validateSequence(sequence: number): void {
   if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > MAX_SEQUENCE) {
@@ -97,14 +59,14 @@ export function createPeerMessageStore(database: Database.Database, localUserId:
   return {
     async persistBeforeSend(message): Promise<void> {
       if (message.senderId !== localUserId) throw new Error('Outbound message is not authored by the local user.');
-      const serialized = serializeEnvelope(message, 'chat');
+      const serialized = serializeStoredEnvelope(message, 'chat');
       validateSequence(message.sequence);
       const result = storeChat(message, serialized);
       if (result === 'conflict') throw new Error('Message ID or author sequence is already occupied.');
     },
 
     async persistVerifiedIncoming(message): Promise<IncomingMessageResult> {
-      const serialized = serializeEnvelope(message, 'chat');
+      const serialized = serializeStoredEnvelope(message, 'chat');
       validateSequence(message.sequence);
       return storeChat(message, serialized);
     },
@@ -130,7 +92,7 @@ export function createPeerMessageStore(database: Database.Database, localUserId:
     },
 
     async persistRecipientAck(acknowledgement: SignedAckEnvelope): Promise<void> {
-      const serialized = serializeEnvelope(acknowledgement, 'ack');
+      const serialized = serializeStoredEnvelope(acknowledgement, 'ack');
       validateSequence(acknowledgement.sequence);
       const persistAck = database.transaction(() => {
         const message = database.prepare(`

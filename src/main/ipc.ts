@@ -1,112 +1,316 @@
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
-import { profileUpdateFromIpc } from './profile-validation';
-import type { GroupMember, IdentitySignature } from '../shared/cloud-contracts';
-import { envelopeSigningBytes, parseProtocolEnvelope, validateProtocolEnvelope, MAX_SYNC_RANGE, MAX_SYNC_BATCH_MESSAGES, type SignedChatEnvelope, type SignedAckEnvelope } from '../shared/webrtc-protocol';
-import type { LocalLarpDatabase } from './database';
-import type { LarpRuntime } from './services/runtime';
-import { listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const INVITE_CODE = /^[A-Za-z0-9_-]{43}$/;
+import { randomUUID } from 'node:crypto';
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents, type WebFrameMain } from 'electron';
+import type { CoreEvent, CoreOperation, CoreRequest } from '../shared/native-core-contracts';
+import type { NativeCoreClient } from './native-core';
+import { clearDesktopDisplayCapture, listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
 
+const CORE_EVENT_KINDS = { members: true, presence: true, signal: true, error: true } as const;
+type SubscriptionKind = 'members' | 'presence' | 'signals';
+type SubscribeOperation = 'subscribeCloudMembers' | 'subscribeCloudPresence' | 'subscribeSignals';
 
-
-function requireSequence(value: unknown, label: string, allowZero = false): number {
-  if (!Number.isSafeInteger(value) || (value as number) < (allowZero ? 0 : 1)) throw new TypeError(`${label} inválida.`);
-  return value as number;
+interface SubscriptionState {
+  key: string;
+  subscriptionId: string;
+  epoch: number;
+  groupId: string;
+  kind: SubscriptionKind;
+  sender: WebContents;
+  frame: WebFrameMain;
+  active: boolean;
+  opening: boolean;
+  cancelSent: boolean;
+  onDestroyed: () => void;
 }
 
-function cloudIdentity(runtime: LarpRuntime): { userId: string } {
-  const status = runtime.getCloudStatus();
-  if (status.state !== 'ready' || !status.userId) throw new Error('A sessão de grupos não está disponível.');
-  return { userId: requireUuid(status.userId, 'Usuário') };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function recordInput(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new TypeError(`${label} inválido.`);
+  return value;
 }
 
 function requireText(value: unknown, maxLength: number, label: string): string {
   if (typeof value !== 'string' || !value.trim() || value.length > maxLength) throw new TypeError(`${label} inválido.`);
   return value.trim();
 }
-
-function requireUuid(value: unknown, label: string): string {
-  const uuid = requireText(value, 36, label);
-  if (!UUID.test(uuid)) throw new TypeError(`${label} inválido.`);
-  return uuid;
+function identityPayloadBase64(value: unknown): string {
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 1024 * 1024) {
+    throw new TypeError('Conteúdo de identidade inválido.');
+  }
+  return Buffer.from(value, 'utf8').toString('base64');
 }
+
 function assertTrustedFrame(event: IpcMainInvokeEvent, mainWindow: BrowserWindow | null): void {
   if (!mainWindow || BrowserWindow.fromWebContents(event.sender) !== mainWindow || event.senderFrame !== event.sender.mainFrame) {
     throw new Error('Origem IPC não autorizada.');
   }
 }
 
-export function registerIpcHandlers(
-  database: LocalLarpDatabase,
-  getMainWindow: () => BrowserWindow | null,
-  runtime: LarpRuntime,
-): void {
-  const screenViewerRestoreState = new WeakMap<BrowserWindow, { wasMaximized: boolean; wasFullScreen: boolean }>();
+function parseCoreEvent(eventJson: string): CoreEvent {
+  if (Buffer.byteLength(eventJson, 'utf8') > 8 * 1024 * 1024) throw new TypeError('Native core event exceeds the permitted size.');
+  let value: unknown;
+  try { value = JSON.parse(eventJson); } catch { throw new TypeError('Native core event is malformed.'); }
+  if (!isRecord(value) || Object.keys(value).length !== 4
+    || !Object.hasOwn(value, 'subscriptionId') || !Object.hasOwn(value, 'epoch')
+    || !Object.hasOwn(value, 'kind') || !Object.hasOwn(value, 'payload')
+    || typeof value.subscriptionId !== 'string'
+    || !Number.isSafeInteger(value.epoch) || (value.epoch as number) < 1
+    || typeof value.kind !== 'string' || !Object.hasOwn(CORE_EVENT_KINDS, value.kind)) {
+    throw new TypeError('Native core event has an invalid shape.');
+  }
+  return value as unknown as CoreEvent;
+}
 
-  const refreshCloudAndCache = async () => {
-    const status = await runtime.refreshCloud();
-    if (status.state === 'ready') {
-      const membersByGroup = new Map<string, GroupMember[]>();
-      for (const group of status.groups) membersByGroup.set(group.id, await runtime.requireCloud().getMembers(group.id));
-      database.replaceCloudCache(status.groups, membersByGroup);
-    }
-    return status;
+function subscriptionKey(senderId: number, kind: SubscriptionKind, groupId: string): string {
+  return JSON.stringify([senderId, kind, groupId]);
+}
+
+export function registerIpcHandlers(
+  nativeCore: NativeCoreClient,
+  getMainWindow: () => BrowserWindow | null,
+): (eventJson: string) => void {
+  const screenViewerRestoreState = new WeakMap<BrowserWindow, { wasMaximized: boolean; wasFullScreen: boolean }>();
+  const subscriptionsById = new Map<string, SubscriptionState>();
+  const activeSubscriptions = new Map<string, SubscriptionState>();
+  let nextSubscriptionEpoch = 1;
+
+  const invokeCore = async <T>(event: IpcMainInvokeEvent, op: CoreOperation, payload: unknown): Promise<T> => {
+    assertTrustedFrame(event, getMainWindow());
+    const request = { version: 1, op, payload } as CoreRequest;
+    const result = await nativeCore.request(request);
+    assertTrustedFrame(event, getMainWindow());
+    return result as T;
   };
 
-  ipcMain.handle('cloud:get-status', (event) => {
+  const cancelNativeSubscription = (state: SubscriptionState): void => {
+    if (state.opening || state.cancelSent) return;
+    state.cancelSent = true;
+    void nativeCore.cancelSubscription(state.subscriptionId, state.epoch).catch((error: unknown) => {
+      if (isRecord(error) && (error.code === 'closed' || error.code === 'stale-context')) return;
+      console.error('Não foi possível cancelar a inscrição nativa:', error);
+    });
+  };
+
+  const disposeSubscription = (state: SubscriptionState): void => {
+    if (!state.active) return;
+    state.active = false;
+    state.sender.removeListener('destroyed', state.onDestroyed);
+    if (subscriptionsById.get(state.subscriptionId) === state) subscriptionsById.delete(state.subscriptionId);
+    if (activeSubscriptions.get(state.key) === state) activeSubscriptions.delete(state.key);
+    cancelNativeSubscription(state);
+  };
+
+  const subscribe = async (
+    event: IpcMainInvokeEvent,
+    groupValue: unknown,
+    kind: SubscriptionKind,
+    op: SubscribeOperation,
+  ): Promise<boolean> => {
     assertTrustedFrame(event, getMainWindow());
-    return runtime.getCloudStatus();
-  });
-  ipcMain.handle('profile:get', (event) => {
-    assertTrustedFrame(event, getMainWindow());
-    return runtime.getCloudStatus().state === 'ready' ? runtime.requireCloud().getMyProfile() : null;
-  });
-  ipcMain.handle('profile:save', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (runtime.getCloudStatus().state !== 'ready') throw new Error('A conexão necessária para salvar o perfil não está disponível.');
-    const profile = await runtime.requireCloud().saveMyProfile(profileUpdateFromIpc(input));
-    for (const group of runtime.getCloudStatus().groups) {
-      const members = database.getCachedCloudMembers(group.id);
-      if (members.some((member) => member.userId === profile.userId)) {
-        database.cacheCloudMembers(group.id, members.map((member) => member.userId === profile.userId
-          ? { ...member, profile }
-          : member));
-      }
+    const groupId = requireText(groupValue, 36, 'Grupo');
+    const sender = event.sender;
+    const frame = event.senderFrame;
+    if (!frame) throw new Error('Frame principal indisponível.');
+    const key = subscriptionKey(sender.id, kind, groupId);
+    const prior = activeSubscriptions.get(key);
+    if (prior) disposeSubscription(prior);
+    if (!Number.isSafeInteger(nextSubscriptionEpoch) || nextSubscriptionEpoch > Number.MAX_SAFE_INTEGER) {
+      throw new Error('A sequência de inscrições foi esgotada.');
     }
-    return profile;
+    const state: SubscriptionState = {
+      key,
+      subscriptionId: randomUUID(),
+      epoch: nextSubscriptionEpoch++,
+      groupId,
+      kind,
+      sender,
+      frame,
+      active: true,
+      opening: true,
+      cancelSent: false,
+      onDestroyed: () => disposeSubscription(state),
+    };
+    subscriptionsById.set(state.subscriptionId, state);
+    activeSubscriptions.set(key, state);
+    sender.once('destroyed', state.onDestroyed);
+    try {
+      await invokeCore(event, op, { groupId, subscriptionId: state.subscriptionId, epoch: state.epoch });
+      state.opening = false;
+      if (!state.active) cancelNativeSubscription(state);
+      return state.active;
+    } catch (error) {
+      state.opening = false;
+      if (state.active) disposeSubscription(state);
+      else cancelNativeSubscription(state);
+      throw error;
+    }
+  };
+
+  const unsubscribe = (event: IpcMainInvokeEvent, groupValue: unknown, kind: SubscriptionKind): void => {
+    assertTrustedFrame(event, getMainWindow());
+    const groupId = requireText(groupValue, 36, 'Grupo');
+    const state = activeSubscriptions.get(subscriptionKey(event.sender.id, kind, groupId));
+    if (state) disposeSubscription(state);
+  };
+
+  const sendError = (state: SubscriptionState, payload: unknown): void => {
+    const message = isRecord(payload) && typeof payload.message === 'string'
+      ? payload.message.slice(0, 2_048)
+      : 'A inscrição em tempo real falhou.';
+    const channel = state.kind === 'members' ? 'cloud:members-error'
+      : state.kind === 'presence' ? 'cloud:presence-error' : 'signals:error';
+    state.frame.send(channel, { groupId: state.groupId, message });
+  };
+
+  const handleCoreEvent = (eventJson: string): void => {
+    const event = parseCoreEvent(eventJson);
+    const state = subscriptionsById.get(event.subscriptionId);
+    if (!state || !state.active || state.epoch !== event.epoch) return;
+    if (state.sender.isDestroyed() || state.frame !== state.sender.mainFrame
+      || BrowserWindow.fromWebContents(state.sender) !== getMainWindow()) {
+      disposeSubscription(state);
+      return;
+    }
+    if (event.kind === 'error') {
+      sendError(state, event.payload);
+      return;
+    }
+    if (event.kind === 'members' && state.kind === 'members' && Array.isArray(event.payload)) {
+      state.frame.send('cloud:members-update', { groupId: state.groupId, members: event.payload });
+      return;
+    }
+    if (event.kind === 'presence' && state.kind === 'presence' && isRecord(event.payload)
+      && isRecord(event.payload.presence) && typeof event.payload.ready === 'boolean') {
+      const presence: Record<string, 'online' | 'away'> = {};
+      for (const [userId, status] of Object.entries(event.payload.presence)) {
+        if (status !== 'online' && status !== 'away') {
+          sendError(state, { message: 'A presença recebida é inválida.' });
+          return;
+        }
+        presence[userId] = status;
+      }
+      state.frame.send('cloud:presence-update', { groupId: state.groupId, presence, ready: event.payload.ready });
+      return;
+    }
+    if (event.kind === 'signal' && state.kind === 'signals' && isRecord(event.payload)
+      && typeof event.payload.senderId === 'string' && typeof event.payload.kind === 'string') {
+      state.frame.send('signals:received', {
+        groupId: state.groupId,
+        senderId: event.payload.senderId,
+        envelope: event.payload,
+      });
+    }
+  };
+
+  ipcMain.handle('cloud:get-status', (event) => invokeCore(event, 'getCloudStatus', {}));
+  ipcMain.handle('cloud:refresh', (event) => invokeCore(event, 'refreshCloud', {}));
+  ipcMain.handle('identity:get-public', (event) => invokeCore(event, 'getPublicIdentity', {}));
+  ipcMain.handle('identity:sign', (event, input: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    const request = recordInput(input, 'Dados de assinatura');
+    return invokeCore(event, 'signIdentityPayload', { payloadBase64: identityPayloadBase64(request.payload) });
   });
+  ipcMain.handle('identity:verify', (event, input: unknown) => {
+    assertTrustedFrame(event, getMainWindow());
+    const request = recordInput(input, 'Dados de verificação');
+    return invokeCore(event, 'verifyIdentityPayload', {
+      payloadBase64: identityPayloadBase64(request.payload),
+      signature: request.signature,
+      publicKey: request.publicKey,
+    });
+  });
+
+  ipcMain.handle('cloud:create-group', (event, name: unknown) => invokeCore(event, 'createCloudGroup', { name }));
+  ipcMain.handle('cloud:create-invite', (event, groupId: unknown) => invokeCore(event, 'createCloudInvite', { groupId }));
+  ipcMain.handle('cloud:list-invites', (event, groupId: unknown) => invokeCore(event, 'listCloudInvites', { groupId }));
+  ipcMain.handle('cloud:accept-invite', (event, code: unknown) => invokeCore(event, 'acceptCloudInvite', { code }));
+  ipcMain.handle('cloud:revoke-invite', (event, input: unknown) => {
+    const request = recordInput(input, 'Dados do convite');
+    return invokeCore(event, 'revokeCloudInvite', { groupId: request.groupId, inviteId: request.inviteId });
+  });
+  ipcMain.handle('cloud:remove-member', (event, input: unknown) => {
+    const request = recordInput(input, 'Dados do participante');
+    return invokeCore(event, 'removeCloudMember', { groupId: request.groupId, memberUserId: request.memberUserId });
+  });
+  ipcMain.handle('cloud:leave-group', (event, groupId: unknown) => invokeCore(event, 'leaveCloudGroup', { groupId }));
+  ipcMain.handle('cloud:get-members', (event, groupId: unknown) => invokeCore(event, 'getCloudMembers', { groupId }));
+  ipcMain.handle('profile:get', (event) => invokeCore(event, 'getMyProfile', {}));
+  ipcMain.handle('profile:save', (event, input: unknown) => invokeCore(event, 'saveMyProfile', input));
+  ipcMain.handle('cloud:subscribe-members', (event, groupId: unknown) => subscribe(event, groupId, 'members', 'subscribeCloudMembers'));
+  ipcMain.handle('cloud:unsubscribe-members', (event, groupId: unknown) => unsubscribe(event, groupId, 'members'));
+  ipcMain.handle('cloud:subscribe-presence', (event, groupId: unknown) => subscribe(event, groupId, 'presence', 'subscribeCloudPresence'));
+  ipcMain.handle('cloud:unsubscribe-presence', (event, groupId: unknown) => unsubscribe(event, groupId, 'presence'));
+  ipcMain.handle('cloud:get-turn-servers', (event, groupId: unknown) => invokeCore(event, 'getTurnServers', { groupId }));
+  ipcMain.handle('cloud:get-cache', (event) => invokeCore(event, 'getCachedCloudGroups', {}));
+  ipcMain.handle('cloud:get-cached-members', (event, groupId: unknown) => invokeCore(event, 'getCachedCloudMembers', { groupId }));
+
+  ipcMain.handle('screen-share:acquire', (event, groupId: unknown) => invokeCore(event, 'acquireScreenShare', { groupId }));
+  ipcMain.handle('screen-share:release', (event, groupId: unknown) => invokeCore(event, 'releaseScreenShare', { groupId }));
+
+  ipcMain.handle('messages:read-cached', (event, input: unknown) => {
+    const request = recordInput(input, 'Consulta de histórico');
+    return invokeCore(event, 'getCachedMessages', { groupId: request.groupId, perAuthorLimit: request.perAuthorLimit });
+  });
+  ipcMain.handle('messages:persist-outgoing', (event, message: unknown) => invokeCore(event, 'persistOutgoingEnvelope', { message }));
+  ipcMain.handle('messages:persist-verified', (event, message: unknown) => invokeCore(event, 'persistVerifiedEnvelope', { message }));
+  ipcMain.handle('messages:read-missing', (event, input: unknown) => {
+    const request = recordInput(input, 'Faixa de mensagens');
+    return invokeCore(event, 'readMissingEnvelopes', {
+      groupId: request.groupId,
+      authorId: request.authorId,
+      afterSequence: request.afterSequence,
+      throughSequence: request.throughSequence,
+      limit: request.limit,
+    });
+  });
+  ipcMain.handle('messages:persist-ack', (event, acknowledgement: unknown) => invokeCore(event, 'persistMessageAcknowledgement', { acknowledgement }));
+  ipcMain.handle('messages:get-highest', (event, input: unknown) => {
+    const request = recordInput(input, 'Consulta de sequência');
+    return invokeCore(event, 'getHighestContiguousSequence', { groupId: request.groupId, authorId: request.authorId });
+  });
+  ipcMain.handle('messages:read-recent', (event, input: unknown) => {
+    const request = recordInput(input, 'Consulta de histórico');
+    return invokeCore(event, 'getRecentMessages', { groupId: request.groupId, perAuthorLimit: request.perAuthorLimit });
+  });
+
+  ipcMain.handle('signals:send', (event, input: unknown) => {
+    const request = recordInput(input, 'Sinalização');
+    return invokeCore(event, 'sendSignal', { groupId: request.groupId, envelope: request.envelope });
+  });
+  ipcMain.handle('signals:subscribe', (event, groupId: unknown) => subscribe(event, groupId, 'signals', 'subscribeSignals'));
+  ipcMain.handle('signals:unsubscribe', (event, groupId: unknown) => unsubscribe(event, groupId, 'signals'));
+
   ipcMain.handle('display:list-sources', async (event) => {
     assertTrustedFrame(event, getMainWindow());
-    return listDesktopDisplaySources();
+    const sources = await listDesktopDisplaySources();
+    assertTrustedFrame(event, getMainWindow());
+    return sources;
   });
   ipcMain.handle('display:prepare', async (event, input: unknown) => {
     assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input)
-      || !('sourceId' in input) || !('includeSystemAudio' in input)
-      || typeof input.includeSystemAudio !== 'boolean') {
-      throw new TypeError('A fonte da captura de tela é inválida.');
+    const request = recordInput(input, 'A fonte da captura de tela');
+    if (typeof request.includeSystemAudio !== 'boolean') throw new TypeError('A fonte da captura de tela é inválida.');
+    await prepareDesktopDisplayCapture(event.sender.id, requireText(request.sourceId, 512, 'Fonte'), request.includeSystemAudio);
+    try { assertTrustedFrame(event, getMainWindow()); } catch (error) {
+      clearDesktopDisplayCapture(event.sender.id);
+      throw error;
     }
-    await prepareDesktopDisplayCapture(event.sender.id, requireText(input.sourceId, 512, 'Fonte'), input.includeSystemAudio);
   });
   ipcMain.handle('window:set-screen-viewer-expanded', (event, expanded: unknown) => {
     const window = getMainWindow();
     if (!window) throw new Error('Janela principal indisponível.');
     assertTrustedFrame(event, window);
     if (typeof expanded !== 'boolean') throw new TypeError('Estado da visualização de tela inválido.');
-
     if (expanded) {
       if (!screenViewerRestoreState.has(window)) {
-        screenViewerRestoreState.set(window, {
-          wasMaximized: window.isMaximized(),
-          wasFullScreen: window.isFullScreen(),
-        });
+        screenViewerRestoreState.set(window, { wasMaximized: window.isMaximized(), wasFullScreen: window.isFullScreen() });
       }
       if (window.isFullScreen()) window.setFullScreen(false);
       if (!window.isMaximized()) window.maximize();
       return;
     }
-
     const restoreState = screenViewerRestoreState.get(window);
     if (!restoreState) return;
     screenViewerRestoreState.delete(window);
@@ -114,403 +318,5 @@ export function registerIpcHandlers(
     else if (!restoreState.wasMaximized && window.isMaximized()) window.unmaximize();
   });
 
-  ipcMain.handle('screen-share:acquire', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    cloudIdentity(runtime);
-    return runtime.requireCloud().acquireShareLease(groupId);
-  });
-  ipcMain.handle('screen-share:release', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    cloudIdentity(runtime);
-    await runtime.requireCloud().releaseShareLease(groupId);
-  });
-
-  ipcMain.handle('cloud:get-turn-servers', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    cloudIdentity(runtime);
-    return runtime.requireCloud().getTurnServers(groupId);
-  });
-  ipcMain.handle('cloud:refresh', async (event) => {
-    assertTrustedFrame(event, getMainWindow());
-    return refreshCloudAndCache();
-  });
-
-  ipcMain.handle('identity:get-public', (event) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!runtime.publicIdentity) throw new Error(runtime.getCloudStatus().detail);
-    return runtime.publicIdentity;
-  });
-
-  ipcMain.handle('identity:sign', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!input || typeof input !== 'object' || Array.isArray(input) || !('payload' in input)) {
-      throw new TypeError('Dados de assinatura inválidos.');
-    }
-    const payload = input.payload;
-    if (typeof payload !== 'string' || payload.length === 0 || Buffer.byteLength(payload, 'utf8') > 65_536) {
-      throw new TypeError('Conteúdo para assinatura inválido.');
-    }
-    if (!runtime.identity) throw new Error('A identidade protegida não está disponível.');
-    return runtime.identity.sign(payload);
-  });
-
-  ipcMain.handle('identity:verify', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!input || typeof input !== 'object' || Array.isArray(input) || !('payload' in input)
-      || !('signature' in input) || !('publicKey' in input)) {
-      throw new TypeError('Dados de verificação inválidos.');
-    }
-    const payload = input.payload;
-    if (typeof payload !== 'string' || payload.length === 0 || Buffer.byteLength(payload, 'utf8') > 65_536) {
-      throw new TypeError('Conteúdo para verificação inválido.');
-    }
-    const publicKey = requireText(input.publicKey, 4096, 'Chave pública');
-    const rawSignature = input.signature;
-    if (!rawSignature || typeof rawSignature !== 'object' || Array.isArray(rawSignature)
-      || !('algorithm' in rawSignature) || !('signature' in rawSignature)
-      || rawSignature.algorithm !== 'Ed25519' || typeof rawSignature.signature !== 'string' || rawSignature.signature.length > 256) {
-      throw new TypeError('Assinatura inválida.');
-    }
-    const signature: IdentitySignature = { algorithm: rawSignature.algorithm, signature: rawSignature.signature };
-    if (!runtime.identity) throw new Error('A identidade protegida não está disponível.');
-    return runtime.identity.verify(payload, signature, publicKey);
-  });
-
-  ipcMain.handle('cloud:create-group', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const name = requireText(input, 80, 'Nome do grupo');
-    const group = await runtime.requireCloud().createGroup(name);
-    await refreshCloudAndCache();
-    return group;
-  });
-
-  ipcMain.handle('cloud:create-invite', (event, groupId: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    return runtime.requireCloud().createInvite(requireUuid(groupId, 'Grupo'));
-  });
-
-  ipcMain.handle('cloud:accept-invite', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const code = requireText(input, 43, 'Convite');
-    if (!INVITE_CODE.test(code)) throw new TypeError('Código de convite inválido.');
-    const group = await runtime.requireCloud().acceptInvite(code);
-    await refreshCloudAndCache();
-    return group;
-  });
-
-  ipcMain.handle('cloud:revoke-invite', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!input || typeof input !== 'object' || Array.isArray(input) || !('groupId' in input) || !('inviteId' in input)) {
-      throw new TypeError('Dados do convite inválidos.');
-    }
-    await runtime.requireCloud().revokeInvite(
-      requireUuid(input.groupId, 'Grupo'),
-      requireUuid(input.inviteId, 'Convite'),
-    );
-  });
-
-  ipcMain.handle('cloud:remove-member', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !('groupId' in input) || !('memberUserId' in input)) {
-      throw new TypeError('Dados do participante inválidos.');
-    }
-    await runtime.requireCloud().removeMember(
-      requireUuid(input.groupId, 'Grupo'),
-      requireUuid(input.memberUserId, 'Participante'),
-    );
-    await refreshCloudAndCache();
-  });
-  ipcMain.handle('cloud:get-members', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    const members = await runtime.requireCloud().getMembers(groupId);
-    database.cacheCloudMembers(groupId, members);
-    return members;
-  });
-  ipcMain.handle('cloud:subscribe-members', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    const sender = event.sender;
-    membershipSubscriptions.get(sender.id)?.get(groupId)?.dispose();
-    const disposeCloud = await runtime.requireCloud().subscribeRealtimeMembers(
-      groupId,
-      (members) => {
-        if (sender.isDestroyed() || BrowserWindow.fromWebContents(sender) !== getMainWindow()) return;
-        database.cacheCloudMembers(groupId, members);
-        sender.send('cloud:members-update', { groupId, members });
-      },
-      (message) => {
-        if (!sender.isDestroyed() && BrowserWindow.fromWebContents(sender) === getMainWindow()) {
-          sender.send('cloud:members-error', { groupId, message });
-        }
-      },
-    );
-    const dispose = () => {
-      void disposeCloud();
-      sender.removeListener('destroyed', dispose);
-      const subscriptions = membershipSubscriptions.get(sender.id);
-      if (subscriptions?.get(groupId)?.dispose === dispose) {
-        subscriptions.delete(groupId);
-        if (subscriptions.size === 0) membershipSubscriptions.delete(sender.id);
-      }
-    };
-    const subscriptions = membershipSubscriptions.get(sender.id) ?? new Map<string, { dispose: () => void }>();
-    subscriptions.set(groupId, { dispose });
-    membershipSubscriptions.set(sender.id, subscriptions);
-    sender.once('destroyed', dispose);
-    return true;
-  });
-  ipcMain.handle('cloud:unsubscribe-members', (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    membershipSubscriptions.get(event.sender.id)?.get(groupId)?.dispose();
-  });
-  ipcMain.handle('cloud:subscribe-presence', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    const sender = event.sender;
-    presenceSubscriptions.get(sender.id)?.get(groupId)?.dispose();
-    const disposeCloud = await runtime.requireCloud().subscribeRealtimePresence(
-      groupId,
-      (presence, ready) => {
-        if (!sender.isDestroyed() && BrowserWindow.fromWebContents(sender) === getMainWindow()) {
-          sender.send('cloud:presence-update', { groupId, presence, ready });
-        }
-      },
-      (message) => {
-        if (!sender.isDestroyed() && BrowserWindow.fromWebContents(sender) === getMainWindow()) {
-          sender.send('cloud:presence-error', { groupId, message });
-        }
-      },
-    );
-    const dispose = () => {
-      void disposeCloud();
-      sender.removeListener('destroyed', dispose);
-      const subscriptions = presenceSubscriptions.get(sender.id);
-      if (subscriptions?.get(groupId)?.dispose === dispose) {
-        subscriptions.delete(groupId);
-        if (subscriptions.size === 0) presenceSubscriptions.delete(sender.id);
-      }
-    };
-    const subscriptions = presenceSubscriptions.get(sender.id) ?? new Map<string, { dispose: () => void }>();
-    subscriptions.set(groupId, { dispose });
-    presenceSubscriptions.set(sender.id, subscriptions);
-    sender.once('destroyed', dispose);
-    return true;
-  });
-  ipcMain.handle('cloud:unsubscribe-presence', (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    presenceSubscriptions.get(event.sender.id)?.get(groupId)?.dispose();
-  });
-  ipcMain.handle('cloud:get-cache', (event) => {
-    assertTrustedFrame(event, getMainWindow());
-    return database.getCachedCloudGroups();
-  });
-  ipcMain.handle('cloud:get-cached-members', (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    return database.getCachedCloudMembers(requireUuid(groupValue, 'Grupo'));
-  });
- 
-  const messageStores = new Map<string, ReturnType<LocalLarpDatabase['createMessageStore']>>();
-  const signalSubscriptions = new Map<number, { groupId: string; dispose: () => void }>();
-  const membershipSubscriptions = new Map<number, Map<string, { dispose: () => void }>>();
-  const presenceSubscriptions = new Map<number, Map<string, { dispose: () => void }>>();
-  const getStore = (userId: string) => {
-    let store = messageStores.get(userId);
-    if (!store) {
-      store = database.createMessageStore(userId);
-      messageStores.set(userId, store);
-    }
-    return store;
-  };
-  const getMemberKey = async (groupId: string, userId: string): Promise<string | undefined> => {
-    const members = await runtime.requireCloud().getMembers(groupId);
-    return members.find((member) => member.userId === userId)?.publicKey;
-  };
-  const verifyMemberEnvelope = async (envelope: SignedChatEnvelope | SignedAckEnvelope, groupId: string, senderId: string) => {
-    const key = await getMemberKey(groupId, senderId);
-    if (!key || !runtime.identity || !await runtime.identity.verify(envelopeSigningBytes(envelope), envelope.signature, key)) {
-      throw new Error('Assinatura ou remetente do envelope inválido.');
-    }
-  };
-  ipcMain.handle('cloud:list-invites', (event, groupId: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    return runtime.requireCloud().listInvites(requireUuid(groupId, 'Grupo'));
-  });
-  ipcMain.handle('cloud:leave-group', async (event, groupId: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const result = await runtime.requireCloud().leaveGroup(requireUuid(groupId, 'Grupo'));
-    await refreshCloudAndCache();
-    return result;
-  });
-  ipcMain.handle('messages:persist-outgoing', async (event, raw: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const parsed = validateProtocolEnvelope(raw);
-    if (!parsed.ok || parsed.envelope.kind !== 'chat') throw new TypeError('Envelope de mensagem inválido.');
-    const { envelope } = parsed;
-    requireUuid(envelope.groupId, 'Grupo');
-    requireUuid(envelope.senderId, 'Remetente');
-    const { userId } = cloudIdentity(runtime);
-    if (envelope.senderId !== userId) throw new Error('A mensagem não pertence ao usuário local.');
-    await verifyMemberEnvelope(envelope, envelope.groupId, userId);
-    await getStore(userId).persistBeforeSend(envelope);
-  });
-  ipcMain.handle('messages:persist-verified', async (event, raw: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const parsed = validateProtocolEnvelope(raw);
-    if (!parsed.ok || parsed.envelope.kind !== 'chat') throw new TypeError('Envelope de mensagem inválido.');
-    const { envelope } = parsed;
-    requireUuid(envelope.groupId, 'Grupo');
-    requireUuid(envelope.senderId, 'Remetente');
-    const { userId } = cloudIdentity(runtime);
-    await verifyMemberEnvelope(envelope, envelope.groupId, envelope.senderId);
-    return getStore(userId).persistVerifiedIncoming(envelope);
-  });
-  ipcMain.handle('messages:persist-ack', async (event, raw: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const parsed = validateProtocolEnvelope(raw);
-    if (!parsed.ok || parsed.envelope.kind !== 'ack') throw new TypeError('Confirmação inválida.');
-    const { envelope } = parsed;
-    requireUuid(envelope.groupId, 'Grupo');
-    requireUuid(envelope.senderId, 'Remetente');
-    const { userId } = cloudIdentity(runtime);
-    await verifyMemberEnvelope(envelope, envelope.groupId, envelope.senderId);
-    await getStore(userId).persistRecipientAck(envelope);
-  });
-  ipcMain.handle('messages:read-missing', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input) || !('groupId' in input) || !('authorId' in input) || !('afterSequence' in input) || !('throughSequence' in input) || !('limit' in input)) throw new TypeError('Faixa inválida.');
-    const groupId = requireUuid(input.groupId, 'Grupo');
-    const authorId = requireUuid(input.authorId, 'Autor');
-    const after = requireSequence(input.afterSequence, 'Sequência', true);
-    const through = requireSequence(input.throughSequence, 'Sequência', true);
-    const limit = requireSequence(input.limit, 'Limite');
-    if (through < after || through - after > MAX_SYNC_RANGE || limit > MAX_SYNC_BATCH_MESSAGES) throw new TypeError('Faixa inválida.');
-    const { userId } = cloudIdentity(runtime);
-    if (!await getMemberKey(groupId, userId) || !await getMemberKey(groupId, authorId)) throw new Error('Membro do grupo inválido.');
-    return getStore(userId).readMissing(groupId, authorId, after, through, limit);
-  });
-  ipcMain.handle('messages:get-highest', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input) || !('groupId' in input) || !('authorId' in input)) throw new TypeError('Consulta inválida.');
-    const groupId = requireUuid(input.groupId, 'Grupo');
-    const authorId = requireUuid(input.authorId, 'Autor');
-    const { userId } = cloudIdentity(runtime);
-    if (!await getMemberKey(groupId, userId) || !await getMemberKey(groupId, authorId)) throw new Error('Membro do grupo inválido.');
-    return getStore(userId).getHighestContiguousSequence(groupId, authorId);
-  });
-  ipcMain.handle('messages:read-recent', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input) || !('groupId' in input)) {
-      throw new TypeError('Consulta de histórico inválida.');
-    }
-    const request = input as Record<string, unknown>;
-    const groupId = requireUuid(request.groupId, 'Grupo');
-    const perAuthorLimit = request.perAuthorLimit === undefined ? 100 : requireSequence(request.perAuthorLimit, 'Limite');
-    if (perAuthorLimit > 100) throw new TypeError('O limite de histórico deve ser de até 100 mensagens por participante.');
-    const { userId } = cloudIdentity(runtime);
-    const members = await runtime.requireCloud().getMembers(groupId);
-    if (!members.some((member) => member.userId === userId)) throw new Error('O usuário não pertence a este grupo.');
-    const store = getStore(userId);
-    const messages: SignedChatEnvelope[] = [];
-    for (const member of members) {
-      const throughSequence = await store.getHighestContiguousSequence(groupId, member.userId);
-      let afterSequence = Math.max(0, throughSequence - perAuthorLimit);
-      while (afterSequence < throughSequence) {
-        const batch = await store.readMissing(groupId, member.userId, afterSequence, throughSequence, MAX_SYNC_BATCH_MESSAGES);
-        if (!batch.length) break;
-        for (const message of batch) {
-          if (message.senderId !== member.userId || !runtime.identity
-            || !await runtime.identity.verify(envelopeSigningBytes(message), message.signature, member.publicKey)) {
-            throw new Error('A assinatura do histórico local não é válida.');
-          }
-        }
-        messages.push(...batch);
-        afterSequence = batch[batch.length - 1].sequence;
-      }
-    }
-    return messages.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  });
-  ipcMain.handle('messages:read-cached', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input) || !('groupId' in input)) {
-      throw new TypeError('Consulta de histórico em cache inválida.');
-    }
-    const request = input as Record<string, unknown>;
-    const groupId = requireUuid(request.groupId, 'Grupo');
-    const perAuthorLimit = request.perAuthorLimit === undefined ? 100 : requireSequence(request.perAuthorLimit, 'Limite');
-    if (perAuthorLimit > 100) throw new TypeError('O limite de histórico deve ser de até 100 mensagens por participante.');
-    const members = database.getCachedCloudMembers(groupId);
-    if (members.length === 0) throw new Error('Não há metadados locais para verificar este grupo.');
-    if (!runtime.identity) throw new Error('A identidade protegida não está disponível.');
-    const messages = await database.getCachedMessages(groupId, perAuthorLimit);
-    for (const message of messages) {
-      const member = members.find((candidate) => candidate.userId === message.senderId);
-      if (!member || !await runtime.identity.verify(envelopeSigningBytes(message), message.signature, member.publicKey)) {
-        throw new Error('A assinatura do histórico local não é válida.');
-      }
-    }
-    return messages;
-  });
-  ipcMain.handle('signals:send', async (event, input: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    if (typeof input !== 'object' || input === null || Array.isArray(input) || !('groupId' in input) || !('envelope' in input)) throw new TypeError('Sinalização inválida.');
-    const request = input as Record<string, unknown>;
-    const groupId = requireUuid(request.groupId, 'Grupo');
-    const parsed = validateProtocolEnvelope(request.envelope);
-    if (!parsed.ok || parsed.envelope.groupId !== groupId
-      || !['description', 'ice-batch', 'connect-request', 'protocol-error'].includes(parsed.envelope.kind)
-      || !('recipientId' in parsed.envelope)) throw new TypeError('Sinalização inválida.');
-    const envelope = parsed.envelope;
-    requireUuid(envelope.groupId, 'Grupo');
-    requireUuid(envelope.senderId, 'Remetente');
-    requireUuid(envelope.recipientId, 'Destinatário');
-    const { userId } = cloudIdentity(runtime);
-    if (envelope.senderId !== userId || !await getMemberKey(groupId, envelope.recipientId)) throw new Error('Destinatário ou remetente inválido.');
-    const senderKey = await getMemberKey(groupId, userId);
-    if (!senderKey || !runtime.identity || !await runtime.identity.verify(envelopeSigningBytes(envelope), envelope.signature, senderKey)) throw new Error('Assinatura inválida.');
-    await runtime.requireCloud().sendRealtimeSignal(groupId, envelope);
-  });
-  ipcMain.handle('signals:subscribe', async (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    const { userId } = cloudIdentity(runtime);
-    const sender = event.sender;
-    const prior = signalSubscriptions.get(sender.id);
-    if (prior) prior.dispose();
-    const disposeCloud = await runtime.requireCloud().subscribeRealtimeSignals(groupId, async (senderId, raw) => {
-      try {
-        const parsed = parseProtocolEnvelope(JSON.stringify(raw));
-        if (!parsed.ok) return;
-        const envelope = parsed.envelope;
-        if (senderId !== envelope.senderId || envelope.groupId !== groupId || !('recipientId' in envelope) || envelope.recipientId !== userId) return;
-        requireUuid(envelope.groupId, 'Grupo');
-        requireUuid(envelope.senderId, 'Remetente');
-        requireUuid(envelope.recipientId, 'Destinatário');
-        const key = await getMemberKey(groupId, envelope.senderId);
-        if (!key || !runtime.identity || !await runtime.identity.verify(envelopeSigningBytes(envelope), envelope.signature, key)) return;
-        if (BrowserWindow.fromWebContents(sender) === getMainWindow() && !sender.isDestroyed()) {
-          sender.send('signals:received', { groupId, senderId: envelope.senderId, envelope });
-        }
-      } catch { /* Ignore unauthenticated realtime payloads. */ }
-    });
-    const dispose = () => {
-      disposeCloud();
-      if (signalSubscriptions.get(sender.id)?.dispose === dispose) signalSubscriptions.delete(sender.id);
-    };
-    signalSubscriptions.set(sender.id, { groupId, dispose });
-    sender.once('destroyed', dispose);
-    return true;
-  });
-  ipcMain.handle('signals:unsubscribe', (event, groupValue: unknown) => {
-    assertTrustedFrame(event, getMainWindow());
-    const groupId = requireUuid(groupValue, 'Grupo');
-    const subscription = signalSubscriptions.get(event.sender.id);
-    if (subscription?.groupId === groupId) subscription.dispose();
-  });
+  return handleCoreEvent;
 }

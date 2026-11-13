@@ -2,6 +2,7 @@ node_modules/
 .vite/
 out/
 dist/
+native/larp-core/target/
 coverage/
 *.sqlite
 *.sqlite-shm

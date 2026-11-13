@@ -36,7 +36,7 @@ const bridge: LarpBridge = {
       active = false;
       ipcRenderer.removeListener('cloud:members-update', updateListener);
       ipcRenderer.removeListener('cloud:members-error', errorListener);
-      void subscription.then(() => ipcRenderer.invoke('cloud:unsubscribe-members', groupId)).catch(() => undefined);
+      void ipcRenderer.invoke('cloud:unsubscribe-members', groupId).catch(() => undefined);
     };
   },
   subscribeCloudPresence: (groupId, onPresence, onError) => {
@@ -65,7 +65,7 @@ const bridge: LarpBridge = {
       active = false;
       ipcRenderer.removeListener('cloud:presence-update', updateListener);
       ipcRenderer.removeListener('cloud:presence-error', errorListener);
-      void subscription.then(() => ipcRenderer.invoke('cloud:unsubscribe-presence', groupId)).catch(() => undefined);
+      void ipcRenderer.invoke('cloud:unsubscribe-presence', groupId).catch(() => undefined);
     };
   },
   getTurnServers: (groupId) => ipcRenderer.invoke('cloud:get-turn-servers', groupId),
@@ -91,7 +91,11 @@ const bridge: LarpBridge = {
       if (input?.groupId === groupId) onSignal(input.senderId, input.envelope);
     };
     let active = true;
+    const errorListener = (_event: Electron.IpcRendererEvent, input: { groupId: string; message: string }) => {
+      if (active && input?.groupId === groupId) onError(input.message);
+    };
     ipcRenderer.on('signals:received', listener);
+    ipcRenderer.on('signals:error', errorListener);
     const subscription = ipcRenderer.invoke('signals:subscribe', groupId);
     void subscription.catch((error: unknown) => {
       if (active) onError(error instanceof Error ? error.message : 'Signal subscription failed.');
@@ -100,9 +104,8 @@ const bridge: LarpBridge = {
       if (!active) return;
       active = false;
       ipcRenderer.removeListener('signals:received', listener);
-      void subscription.then(() => ipcRenderer.invoke('signals:unsubscribe', groupId)).catch((error: unknown) => {
-        onError(error instanceof Error ? error.message : 'Signal unsubscribe failed.');
-      });
+      ipcRenderer.removeListener('signals:error', errorListener);
+      void ipcRenderer.invoke('signals:unsubscribe', groupId).catch(() => undefined);
     };
   },
 };

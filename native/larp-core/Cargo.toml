@@ -1,0 +1,27 @@
+[package]
+name = "larp_core"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+base64 = "0.23.1"
+getrandom = "=0.4.3"
+ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8", "zeroize"] }
+napi = { version = "3.16.2", default-features = false, features = ["napi8", "dyn-symbols", "async"] }
+napi-derive = "3.7.1"
+rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "backup", "cache"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls", "stream"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+sha2 = "0.11.1"
+tokio = { version = "=1.54.1", features = ["sync", "rt", "macros"] }
+time = { version = "0.3.46", features = ["parsing"] }
+url = "=2.5.8"
+zeroize = "1.9.1"
+
+[build-dependencies]
+napi-build = "2.6.0"

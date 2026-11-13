@@ -401,6 +401,45 @@ export function parseProtocolEnvelope(raw: unknown): ParsedProtocolEnvelope {
   return validateProtocolEnvelope(value);
 }
 
+export function serializeStoredEnvelope(value: unknown, kind: 'chat' | 'ack'): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new TypeError('Invalid signed message envelope.');
+  }
+  if (typeof serialized !== 'string' || encoder.encode(serialized).byteLength > MAX_ENVELOPE_BYTES) {
+    throw new TypeError('Signed message envelope exceeds the permitted size.');
+  }
+  const parsed = parseProtocolEnvelope(serialized);
+  if (!parsed.ok || parsed.envelope.kind !== kind) {
+    throw new TypeError('Invalid signed message envelope.');
+  }
+  const envelope = parsed.envelope;
+  const canonical = envelope.kind === 'chat'
+    ? {
+      version: envelope.version,
+      kind: envelope.kind,
+      groupId: envelope.groupId,
+      senderId: envelope.senderId,
+      messageId: envelope.messageId,
+      sequence: envelope.sequence,
+      content: envelope.content,
+      createdAt: envelope.createdAt,
+      signature: envelope.signature,
+    }
+    : {
+      version: envelope.version,
+      kind: envelope.kind,
+      groupId: envelope.groupId,
+      senderId: envelope.senderId,
+      messageId: envelope.messageId,
+      sequence: envelope.sequence,
+      signature: envelope.signature,
+    };
+  return JSON.stringify(canonical);
+}
+
 function stableStringify(value: unknown): string {
   if (value === undefined) return 'null';
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

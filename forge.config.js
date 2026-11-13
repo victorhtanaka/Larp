@@ -5,17 +5,13 @@ const fontLicense = path.resolve(__dirname, 'src/assets/fonts/OFL.txt');
 module.exports = {
   packagerConfig: {
     icon: appIcon,
-    asar: { unpack: '**/*.node', unpackDir: 'node_modules/better-sqlite3' },
-    extraResource: ['default-cloud-config.json', appIcon, fontLicense],
+    asar: { unpack: '**/*.node' },
+    extraResource: ['default-cloud-config.json', appIcon, fontLicense, 'native/larp-core/dist/larp_core.node'],
     ignore: (file) => {
       if (!file) return false;
       const isViteOutput = file === '/.vite' || file.startsWith('/.vite/');
       const isNodeModulesRoot = file === '/node_modules';
-      const isSqliteRuntime = [
-        '/node_modules/better-sqlite3',
-        '/node_modules/node-addon-api',
-      ].some((path) => file === path || file.startsWith(`${path}/`));
-      return !isViteOutput && !isNodeModulesRoot && !isSqliteRuntime;
+      return !isViteOutput && !isNodeModulesRoot;
     },
   },
   makers: [
