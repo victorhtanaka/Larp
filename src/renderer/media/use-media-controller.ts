@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SelectedDisplaySource } from '../../shared/contracts';
-import { MediaQualityController, type AudioSenderProfile, type VideoContentPreference } from './quality';
+import { CpuPressureTracker, displayCaptureConstraints, MediaQualityController, type AudioSenderProfile, type PeerMediaStats, type VideoContentPreference } from './quality';
 import { MediaSession, supportsNoiseSuppression, type MediaDeviceOption } from './session';
 import type { PeerConnectionStatus, PeerMesh } from '../rtc/peer-mesh';
 import {
@@ -81,6 +81,11 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const [shareStarting, setShareStarting] = useState(false);
   const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
+  const [showLocalPreview, setShowLocalPreview] = useState(false);
+  const [transmissionStats, setTransmissionStats] = useState<PeerMediaStats[]>([]);
+  const [systemCpuUsage, setSystemCpuUsage] = useState<number | null>(null);
+  const screenModeRef = useRef(screenMode);
+  screenModeRef.current = screenMode;
 
   const [remoteAudioPeerIds, setRemoteAudioPeerIds] = useState<string[]>([]);
   const [speakingParticipantIds, setSpeakingParticipantIds] = useState<string[]>([]);
@@ -111,6 +116,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   const callActiveRef = useRef(false);
   const configuredSendersRef = useRef(new WeakSet<RTCRtpSender>());
   const qualityControllerRef = useRef(new MediaQualityController());
+  const pressureTrackerRef = useRef(new CpuPressureTracker());
 
   const voiceParticipantVolumesRef = useRef(voiceParticipantVolumes);
   voiceParticipantVolumesRef.current = voiceParticipantVolumes;
@@ -270,7 +276,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('O compartilhamento de tela não está disponível neste computador.');
           await window.larp.prepareDisplayCapture(source.id, options.audio);
           return navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 60, max: 60 } },
+            video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: screenModeRef.current === 'text' ? 30 : 60 } },
             audio: options.audio ? {
               channelCount: { ideal: 2 },
               echoCancellation: false,
@@ -545,10 +551,10 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   useEffect(() => {
     const video = screenVideoRef.current;
     if (!video) return;
-    const stream = displayStream ?? remoteVideoStream;
+    const stream = displayStream ? (showLocalPreview ? displayStream : null) : remoteVideoStream;
     video.srcObject = stream;
     if (stream) void video.play().catch(() => setShareError('A prévia de vídeo não pôde ser iniciada.'));
-  }, [displayStream, remoteVideoStream]);
+  }, [displayStream, remoteVideoStream, showLocalPreview]);
 
   const configureCodecPreference = useCallback(async (peerId: string, track: MediaStreamTrack, profile: AudioSenderProfile) => {
     if (!mesh) return;
@@ -687,9 +693,15 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
   }, [videoBudgetMbps]);
 
   useEffect(() => {
-    if (!shareActive || !mesh) return;
+    if (!shareActive || !mesh) {
+      pressureTrackerRef.current = new CpuPressureTracker();
+      setTransmissionStats([]);
+      setSystemCpuUsage(null);
+      return;
+    }
     let current = true;
     let busy = false;
+    let captureSettings = '';
     const controller = qualityControllerRef.current;
     const updateStats = async () => {
       if (busy || !current) return;
@@ -702,6 +714,24 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
           peerConnection: item.connection,
           content: screenMode,
         })));
+        const cpu = await window.larp.getSystemCpuUsage().catch(() => null);
+        if (!current) return;
+        setSystemCpuUsage(cpu);
+        setTransmissionStats(mediaStats);
+        const pressure = pressureTrackerRef.current.update(cpu, mediaStats.some((stats) => stats.qualityLimitation.value === 'cpu'));
+        const track = displayStreamRef.current?.getVideoTracks()[0];
+        const constraints = displayCaptureConstraints(screenMode, videoPeers.length, pressure);
+        const settingsKey = JSON.stringify(constraints);
+        if (track && captureSettings !== settingsKey) {
+          try {
+            await track.applyConstraints(constraints);
+            captureSettings = settingsKey;
+          } catch {
+            if (current) setShareError('Não foi possível ajustar automaticamente a captura desta tela.');
+            captureSettings = settingsKey;
+          }
+        }
+        if (!current) return;
         const qualityPeers = await Promise.all(videoPeers.map(async (item, index) => {
           let availableOutgoingBitrate: number | undefined;
           try {
@@ -719,7 +749,7 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
             peerConnection: item.connection,
             content: screenMode,
             availableOutgoingBitrate,
-            cpuPressure: mediaStats[index]?.qualityLimitation.value === 'cpu' ? 'high' as const : 'unknown' as const,
+            cpuPressure: pressure,
           };
         }));
         await controller.allocate(qualityPeers);
@@ -1247,6 +1277,10 @@ export function useMediaController({ groupId, mesh, connectedPeerIds, localParti
     shareActive,
     shareSourceName,
     shareError,
+    showLocalPreview,
+    setShowLocalPreview,
+    transmissionStats,
+    systemCpuUsage,
     displayStream,
     shareStarting,
     remoteVideoStream,

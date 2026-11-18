@@ -1345,6 +1345,11 @@ function App() {
                   <span>{callParticipants.length} {callParticipants.length === 1 ? 'participante na chamada' : 'participantes na chamada'}</span>
                 )}
               </div>
+              {media.displayStream && (
+                <button type="button" className="screen-stage-toggle" aria-pressed={media.showLocalPreview} onClick={() => media.setShowLocalPreview((shown) => !shown)}>
+                  {media.showLocalPreview ? 'Ocultar prévia local' : 'Mostrar prévia local'}
+                </button>
+              )}
               {(media.displayStream || media.remoteVideoStream) && (
                 <button
                   ref={screenViewerToggleRef}
@@ -1364,17 +1369,25 @@ function App() {
             <div className={`call-stage-layout${media.displayStream || media.remoteVideoStream ? ' call-stage-layout-screen' : ''}${(media.displayStream || media.remoteVideoStream) && callParticipants.length > 0 ? ' call-stage-layout-sharing' : ''}`}>
               {(media.displayStream || media.remoteVideoStream) && (
                 <div className="call-stage-screen">
-                  <video
-                    ref={media.screenVideoRef}
-                    muted={Boolean(media.displayStream)}
-                    autoPlay
-                    playsInline
-                    aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'}
-                    tabIndex={media.remoteVideoStream && !media.displayStream ? 0 : undefined}
-                    aria-keyshortcuts={media.remoteVideoStream && !media.displayStream ? 'Shift+F10' : undefined}
-                    onContextMenu={media.remoteVideoStream && !media.displayStream ? transmissionVolumeContextMenu : undefined}
-                    onKeyDown={media.remoteVideoStream && !media.displayStream ? transmissionVolumeKeyDown : undefined}
-                  />
+                  {(!media.displayStream || media.showLocalPreview) && (
+                    <video
+                      ref={media.screenVideoRef}
+                      muted={Boolean(media.displayStream)}
+                      autoPlay
+                      playsInline
+                      aria-label={media.displayStream ? 'Prévia da tela compartilhada' : 'Tela compartilhada pelo grupo'}
+                      tabIndex={media.remoteVideoStream && !media.displayStream ? 0 : undefined}
+                      aria-keyshortcuts={media.remoteVideoStream && !media.displayStream ? 'Shift+F10' : undefined}
+                      onContextMenu={media.remoteVideoStream && !media.displayStream ? transmissionVolumeContextMenu : undefined}
+                      onKeyDown={media.remoteVideoStream && !media.displayStream ? transmissionVolumeKeyDown : undefined}
+                    />
+                  )}
+                  {media.displayStream && !media.showLocalPreview && (
+                    <div className="screen-preview-disabled">
+                      <strong>Prévia local desativada</strong>
+                      <span>O compartilhamento continua ativo para os participantes.</span>
+                    </div>
+                  )}
                   {media.remoteVideoStream && !media.displayStream && (
                     <button
                       type="button"
@@ -1422,6 +1435,29 @@ function App() {
                 </div>
               )}
             </div>
+            {media.displayStream && media.shareError && <p className="dialog-error" role="alert">{media.shareError}</p>}
+            {media.displayStream && (
+              <details className="transmission-diagnostics" open>
+                <summary>Diagnóstico de envio</summary>
+                <p>CPU do sistema: {media.systemCpuUsage === null ? 'Indisponível' : `${media.systemCpuUsage.toFixed(1)}%`}</p>
+                {media.transmissionStats.length === 0 ? (
+                  <p>Estatísticas de envio por participante indisponíveis.</p>
+                ) : media.transmissionStats.map((stats) => (
+                  <div className="transmission-peer" key={stats.peerId}>
+                    <strong>{profilesByUserId.get(stats.peerId)?.displayName?.trim() || `Participante · ${stats.peerId.slice(-6).toUpperCase()}`}</strong>
+                    <dl>
+                      <div><dt>Resolução</dt><dd>{stats.resolution.value ? `${stats.resolution.value.width} × ${stats.resolution.value.height} px` : 'Indisponível'}</dd></div>
+                      <div><dt>Quadros</dt><dd>{stats.framesPerSecond.value === null ? 'Indisponível' : `${stats.framesPerSecond.value.toFixed(1)} fps`}</dd></div>
+                      <div><dt>Codec</dt><dd>{stats.codec.value ?? 'Indisponível'}</dd></div>
+                      <div><dt>Envio</dt><dd>{stats.uploadBitrate.value === null ? 'Indisponível' : `${(stats.uploadBitrate.value / 1_000_000).toFixed(2)} Mbps`}</dd></div>
+                      <div><dt>Limitação de qualidade</dt><dd>{stats.qualityLimitation.value ?? 'Indisponível'}</dd></div>
+                      <div><dt>Codificador</dt><dd>{stats.encoderImplementation.value ?? 'Indisponível'}</dd></div>
+                      <div><dt>Codificador eficiente em energia</dt><dd>{stats.powerEfficientEncoder.value === null ? 'Indisponível' : stats.powerEfficientEncoder.value ? 'Sim' : 'Não'}</dd></div>
+                    </dl>
+                  </div>
+                ))}
+              </details>
+            )}
           </section>
         )}
 
@@ -1873,6 +1909,7 @@ function App() {
                     <label><input type="radio" name="screen-mode" checked={media.screenMode === 'text'} onChange={() => media.setScreenMode('text')} /><span><strong>Nitidez</strong><small>Prioriza texto legível e adapta a qualidade à conexão.</small></span></label>
                   </fieldset>
                   <label className="system-audio-option"><input type="checkbox" checked={media.includeSystemAudio} onChange={(event) => media.setIncludeSystemAudio(event.target.checked)} /><span>Incluir áudio do sistema <small>Desativado por padrão; depende das permissões deste computador.</small></span></label>
+                  <label className="system-audio-option"><input type="checkbox" checked={media.showLocalPreview} onChange={(event) => media.setShowLocalPreview(event.target.checked)} /><span>Mostrar prévia local <small>Desativada por padrão; não altera o envio aos participantes.</small></span></label>
                   <label className="budget-label" htmlFor="video-budget">Ajuste de qualidade da transmissão</label>
                   <input id="video-budget" className="budget-slider" type="range" min={1} max={20} step={1} value={media.videoBudgetMbps} onChange={(event) => media.setVideoBudgetMbps(Number(event.target.value))} aria-label="Qualidade máxima da transmissão" />
                 </div>

@@ -29,6 +29,8 @@ export interface PeerMediaStats {
   resolution: Metric<{ width: number; height: number }>;
   framesPerSecond: Metric<number>;
   codec: Metric<string>;
+  encoderImplementation: Metric<string>;
+  powerEfficientEncoder: Metric<boolean>;
   uploadBitrate: Metric<number>;
   path: Metric<{ localCandidateType?: string; remoteCandidateType?: string; protocol?: string; relayProtocol?: string }>;
   qualityLimitation: Metric<'cpu' | 'bandwidth' | 'none' | 'other'>;
@@ -47,6 +49,37 @@ const measured = <T>(value: T): Metric<T> => ({ value, source: 'measured' });
 const incoming = <T>(value: T | null): Metric<T> => ({ value, source: value === null ? 'unavailable' : 'incoming' });
 const AUDIO_MAX_BITRATE_BPS: Record<AudioSenderProfile, number> = { voice: 96_000, transmission: 192_000 };
 const cpuScale: Record<CpuPressure, number> = { low: 1, moderate: 0.78, high: 0.52, critical: 0.3, unknown: 1 };
+
+/** Enters pressure immediately and requires three consecutive recovery samples to leave it. */
+export class CpuPressureTracker {
+  private pressured = false;
+  private recoverySamples = 0;
+
+  update(cpuPercent: number | null, encoderLimited: boolean): 'high' | 'unknown' {
+    if (encoderLimited || (cpuPercent !== null && Number.isFinite(cpuPercent) && cpuPercent >= 85)) {
+      this.pressured = true;
+      this.recoverySamples = 0;
+    } else if (this.pressured) {
+      if (cpuPercent !== null && Number.isFinite(cpuPercent) && cpuPercent >= 0 && cpuPercent < 70) {
+        if (++this.recoverySamples >= 3) {
+          this.pressured = false;
+          this.recoverySamples = 0;
+        }
+      } else {
+        this.recoverySamples = 0;
+      }
+    }
+    return this.pressured ? 'high' : 'unknown';
+  }
+}
+
+export function displayCaptureConstraints(content: VideoContentPreference, viewerCount: number, pressure: 'high' | 'unknown'): MediaTrackConstraints {
+  return {
+    width: { max: pressure === 'high' ? 1280 : 1920 },
+    height: { max: pressure === 'high' ? 720 : 1080 },
+    frameRate: { max: pressure === 'high' ? 20 : content === 'text' || viewerCount > 1 ? 30 : 60 },
+  };
+}
 
 /** Allocates video budgets; voice sender caps are configured independently. */
 export class MediaQualityController {
@@ -99,8 +132,12 @@ export class MediaQualityController {
       const cpu = peer.cpuPressure ?? 'unknown';
       const fpsScale = cpu === 'critical' ? 0.4 : cpu === 'high' ? 0.65 : cpu === 'moderate' ? 0.85 : 1;
       const contentFrameRate = peer.content === 'motion' ? this.maxFrameRate : Math.min(30, this.maxFrameRate);
-      const frameRate = Math.max(5, Math.floor(contentFrameRate * fpsScale));
+      const peerScale = videoPeers.length === 1 ? 1 : videoPeers.length === 2 ? 0.75 : videoPeers.length === 3 ? 0.5 : 0.4;
+      const frameRate = Math.max(1, Math.floor(contentFrameRate * fpsScale * peerScale));
       const scaleResolutionDownBy = peer.content === 'text' ? 1 : cpu === 'high' || cpu === 'critical' ? 1.5 : cpu === 'moderate' ? 1.15 : 1;
+      const alreadyApplied = params.encodings?.length === encodings.length && encodings.every((encoding, encodingIndex) =>
+        encoding.maxBitrate === Math.floor(bitrate / encodings.length) + (encodingIndex < bitrate % encodings.length ? 1 : 0)
+        && encoding.maxFramerate === frameRate && encoding.scaleResolutionDownBy === scaleResolutionDownBy);
       params.encodings = encodings.map((encoding, encodingIndex) => ({
         ...encoding,
         maxBitrate: Math.floor(bitrate / encodings.length) + (encodingIndex < bitrate % encodings.length ? 1 : 0),
@@ -109,7 +146,7 @@ export class MediaQualityController {
       }));
       if (peer.sender.track && 'contentHint' in peer.sender.track) peer.sender.track.contentHint = peer.content === 'motion' ? 'motion' : 'text';
       try {
-        await peer.sender.setParameters(params);
+        if (!alreadyApplied) await peer.sender.setParameters(params);
         allocation[peer.peerId] = bitrate;
       } catch {
         // Unsupported or concurrently changed encodings remain unreported as applied budgets.
@@ -118,7 +155,7 @@ export class MediaQualityController {
     return allocation;
   }
 
-  /** Prefer a common codec list supplied by the caller; never assumes hardware acceleration. */
+  /** Retain the browser's codec order among the compatible codecs. */
   setCompatibleVideoCodecs(transceiver: RTCRtpTransceiver, remoteMimeTypes: readonly string[]): boolean {
     if (typeof transceiver.setCodecPreferences !== 'function' || typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function') return false;
     const local = RTCRtpSender.getCapabilities('video')?.codecs;
@@ -126,8 +163,6 @@ export class MediaQualityController {
     const supportedRemote = new Set(remoteMimeTypes.map((mime) => mime.toLowerCase()));
     const preferences = local.filter((codec) => supportedRemote.has(codec.mimeType.toLowerCase()));
     if (preferences.length === 0) return false;
-    const rank = (mime: string): number => mime.toLowerCase() === 'video/av1' ? 0 : mime.toLowerCase() === 'video/vp9' ? 1 : mime.toLowerCase() === 'video/h264' ? 2 : mime.toLowerCase() === 'video/vp8' ? 3 : 4;
-    preferences.sort((a, b) => rank(a.mimeType) - rank(b.mimeType));
     transceiver.setCodecPreferences(preferences);
     return true;
   }
@@ -170,6 +205,8 @@ export class MediaQualityController {
       resolution: unavailable(),
       framesPerSecond: unavailable(),
       codec: unavailable(),
+      encoderImplementation: unavailable(),
+      powerEfficientEncoder: unavailable(),
       uploadBitrate: unavailable(),
       path: unavailable(),
       qualityLimitation: unavailable(),
@@ -188,12 +225,14 @@ export class MediaQualityController {
       const report = await peer.sender.getStats();
       const stats = [...report.values()];
       const outbound = stats.filter((item) => item.type === 'outbound-rtp' && (item as RTCOutboundRtpStreamStats).kind === 'video');
-      const current = outbound.find((item) => !(item as RTCOutboundRtpStreamStats & { isRemote?: boolean }).isRemote) as (RTCOutboundRtpStreamStats & { codecId?: string; qualityLimitationReason?: string }) | undefined;
+      const current = outbound.find((item) => !(item as RTCOutboundRtpStreamStats & { isRemote?: boolean }).isRemote) as (RTCOutboundRtpStreamStats & { codecId?: string; qualityLimitationReason?: string; encoderImplementation?: string; powerEfficientEncoder?: boolean }) | undefined;
       if (current) {
         const width = current.frameWidth;
         const height = current.frameHeight;
         if (typeof width === 'number' && typeof height === 'number') result.resolution = measured({ width, height });
         if (typeof current.framesPerSecond === 'number') result.framesPerSecond = measured(current.framesPerSecond);
+        if (typeof current.encoderImplementation === 'string') result.encoderImplementation = measured(current.encoderImplementation);
+        if (typeof current.powerEfficientEncoder === 'boolean') result.powerEfficientEncoder = measured(current.powerEfficientEncoder);
         const limitation = current.qualityLimitationReason;
         if (limitation === 'cpu' || limitation === 'bandwidth' || limitation === 'none') result.qualityLimitation = measured(limitation);
         else if (typeof limitation === 'string') result.qualityLimitation = measured('other');

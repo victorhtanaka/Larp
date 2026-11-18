@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents, type
 import type { CoreEvent, CoreOperation, CoreRequest } from '../shared/native-core-contracts';
 import type { NativeCoreClient } from './native-core';
 import { clearDesktopDisplayCapture, listDesktopDisplaySources, prepareDesktopDisplayCapture } from './display-capture';
+import { createSystemCpuUsageSampler } from './system-cpu';
 
 const CORE_EVENT_KINDS = { members: true, presence: true, signal: true, error: true } as const;
 type SubscriptionKind = 'members' | 'presence' | 'signals';
@@ -72,6 +73,7 @@ export function registerIpcHandlers(
   getMainWindow: () => BrowserWindow | null,
 ): (eventJson: string) => void {
   const screenViewerRestoreState = new WeakMap<BrowserWindow, { wasMaximized: boolean; wasFullScreen: boolean }>();
+  const sampleSystemCpuUsage = createSystemCpuUsageSampler();
   const subscriptionsById = new Map<string, SubscriptionState>();
   const activeSubscriptions = new Map<string, SubscriptionState>();
   let nextSubscriptionEpoch = 1;
@@ -204,6 +206,10 @@ export function registerIpcHandlers(
     }
   };
 
+  ipcMain.handle('system:get-cpu-usage', (event) => {
+    assertTrustedFrame(event, getMainWindow());
+    return sampleSystemCpuUsage();
+  });
   ipcMain.handle('cloud:get-status', (event) => invokeCore(event, 'getCloudStatus', {}));
   ipcMain.handle('cloud:refresh', (event) => invokeCore(event, 'refreshCloud', {}));
   ipcMain.handle('identity:get-public', (event) => invokeCore(event, 'getPublicIdentity', {}));

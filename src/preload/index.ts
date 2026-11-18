@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { GroupMember, GroupPresenceStatus } from '../shared/cloud-contracts';
 import type { LarpBridge } from '../shared/contracts';
 const bridge: LarpBridge = {
+  getSystemCpuUsage: () => ipcRenderer.invoke('system:get-cpu-usage'),
   getCloudStatus: () => ipcRenderer.invoke('cloud:get-status'),
   refreshCloud: () => ipcRenderer.invoke('cloud:refresh'),
   getPublicIdentity: () => ipcRenderer.invoke('identity:get-public'),

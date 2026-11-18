@@ -27,6 +27,7 @@ export interface TurnCredentialServer {
 }
 
 export interface LarpBridge {
+  getSystemCpuUsage(): Promise<number | null>;
   getCloudStatus(): Promise<CloudConnectionStatus>;
   refreshCloud(): Promise<CloudConnectionStatus>;
   getPublicIdentity(): Promise<PublicIdentity>;

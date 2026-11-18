@@ -322,6 +322,16 @@ button:disabled { cursor: not-allowed; }
 .call-stage-layout-sharing { grid-template-columns: minmax(0, 1fr) minmax(180px, 260px); align-items: stretch; }
 .call-stage-screen { position: relative; display: grid; min-width: 0; min-height: 150px; place-items: center; overflow: hidden; background: var(--bg); border-radius: 5px; }
 .call-stage-screen video { display: block; width: 100%; max-height: min(38vh, 440px); background: transparent; object-fit: contain; }
+.screen-preview-disabled { display: grid; gap: 5px; padding: 20px; color: var(--text); text-align: center; }
+.screen-preview-disabled span { color: var(--muted); font-size: var(--type-support); line-height: var(--leading-body); }
+.transmission-diagnostics { max-height: 180px; overflow-y: auto; margin-top: 8px; padding: 8px; color: var(--text); background: var(--panel-raised); border-radius: 5px; font-size: var(--type-control); }
+.transmission-diagnostics summary { font-weight: 700; cursor: pointer; }
+.transmission-diagnostics p { margin: 6px 0 0; }
+.transmission-peer { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.transmission-peer dl { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 5px 0 0; }
+.transmission-peer dl div { display: flex; gap: 4px; }
+.transmission-peer dt::after { content: ':'; }
+.transmission-peer dd { margin: 0; font-variant-numeric: tabular-nums; }
 .screen-volume-trigger { position: absolute; top: 8px; right: 8px; z-index: 1; display: grid; width: 30px; height: 30px; place-items: center; color: var(--text); background: var(--panel-raised); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
 .screen-volume-trigger:hover { background: var(--panel-soft); border-color: var(--accent); }
 .call-stage-participants { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); align-content: start; gap: 8px; min-width: 0; }

@@ -97,12 +97,12 @@ Quando a função não fornece credenciais TURN (por configuração, limite ou s
 - Indicadores privados de presença nos avatares: verde online, laranja ausente e cinza offline, exibidos após sincronização do grupo; atividade de voz local destaca em verde o participante que está falando.
 - Escolha explícita de monitor/janela; áudio do sistema desativado por padrão; reserva única de compartilhamento com expiração e liberação ao parar.
 - Palco responsivo combina tela compartilhada e cartões de participantes, com avatar, nome e estado textual; `Esc` retorna ao modo normal sem usar tela cheia exclusiva do sistema.
-- Modos Movimento e Texto, codecs negociados (AV1/VP9/H.264/VP8 conforme suporte), orçamento total padrão de 20 Mb/s e teto de 8 Mb/s por conexão; métricas de resolução, FPS, codec, upload e caminho observado.
+- Modos Fluidez e Nitidez, captura de até 1080p e adaptação de FPS e resolução à carga de CPU e ao número de espectadores. A prévia local começa desativada. O diagnóstico mostra CPU do sistema e as métricas de envio disponíveis por participante, sem presumir aceleração por GPU.
 - Perfis opcionais com nome e avatar WebP para membros autorizados; visibilidade compartilhada por grupo privado, armazenamento offline somente leitura e pseudônimo local restaurado ao limpar os campos.
 - Electron com `contextIsolation`, sandbox, Node desativado no renderer, permissões explícitas e IPC validado no processo principal.
 - A nova logo aparece no cabeçalho do Larp e na janela do updater; o ícone Windows é incluído no executável e no Setup Squirrel.
 
-1080p/60 FPS é uma meta mensurada, não uma garantia. O codec anunciado não prova aceleração por GPU. O modo de qualidade adapta envio por par para preservar voz e respeitar o orçamento configurado.
+1080p/60 FPS é uma meta, não uma garantia. A captura e os parâmetros de envio dependem do suporte do Chromium e da fonte; a malha mantém uma conexão por espectador. O orçamento total padrão de vídeo é 20 Mb/s, com teto de 8 Mb/s por conexão.
 
 ## Verificação local
 
