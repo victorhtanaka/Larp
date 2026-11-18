@@ -126,8 +126,8 @@ Para publicar uma atualização:
 
 1. Atualize `version` no `package.json` e no lockfile, faça commit e envie o código de release.
 2. Crie e envie uma nova tag `vX.Y.Z` no commit que contém esse código. Não reescreva tags publicadas.
-3. Aguarde o workflow `Release` disparado pela tag concluir build, typecheck e testes; esse evento nunca publica uma Release.
-4. Para publicar, execute manualmente `workflow_dispatch` com `ref=vX.Y.Z` e `publish=true`. A publicação valida a tag e a versão do pacote; `publish=false` (padrão) só gera o artifact.
+3. O workflow `Release` valida a tag e a versão do pacote, executa os testes, gera os artefatos e publica automaticamente a Release quando tudo passa. Se falhar, corrija a causa e execute novamente o workflow da tag; não reescreva a tag publicada.
+4. Para apenas testar o build sem publicar, execute `workflow_dispatch` com o `ref` desejado. Essa execução manual não cria Release.
 
 O updater exige Releases públicas com os artefatos Squirrel; o `Setup.exe` isolado não contém os dados usados para atualizar uma instalação existente. Instalações anteriores à versão `0.2.0` precisam instalar manualmente essa versão uma vez para receber atualizações futuras.
 

@@ -7,15 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Git ref to build (a SemVer tag is required to publish)
+        description: Git ref to build without publishing
         type: string
         required: true
         default: main
-      publish:
-        description: Create a public GitHub Release
-        type: boolean
-        required: true
-        default: false
 
 permissions:
   contents: read
@@ -48,6 +43,23 @@ jobs:
         id: commit
         shell: pwsh
         run: '"sha=$((git rev-parse HEAD).Trim())" >> $env:GITHUB_OUTPUT'
+      - name: Validate release tag before building
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          EVENT_COMMIT: ${{ github.sha }}
+        run: |
+          if ($env:TAG -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'Publishing requires a SemVer tag in the form vX.Y.Z.'
+          }
+          $package = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'package.json') -Raw | ConvertFrom-Json
+          if ($package.version -cne $env:TAG.Substring(1)) {
+            throw "Tag $env:TAG does not match package.json version $($package.version)."
+          }
+          if ((git rev-parse HEAD).Trim() -cne $env:EVENT_COMMIT) {
+            throw 'The tag no longer points to the commit that triggered this workflow.'
+          }
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -63,10 +75,12 @@ jobs:
         run: npm run test:native-rust
       - name: Typecheck
         run: npm run typecheck
+      - name: Build native module
+        run: npm run build:native
       - name: Test
-        run: npm test
+        run: npm --ignore-scripts run test
       - name: Build
-        run: npm run make
+        run: npm --ignore-scripts run make
       - name: Validate and stage release files
         shell: pwsh
         run: |
@@ -94,7 +108,7 @@ jobs:
           retention-days: 30
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    if: github.event_name == 'push'
     needs: build
     runs-on: windows-latest
     permissions:
@@ -109,7 +123,7 @@ jobs:
         id: release
         shell: pwsh
         env:
-          SELECTED_REF: ${{ inputs.ref }}
+          SELECTED_REF: ${{ github.ref_name }}
           BUILT_COMMIT: ${{ needs.build.outputs.commit_sha }}
         run: |
           if ($env:SELECTED_REF -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
