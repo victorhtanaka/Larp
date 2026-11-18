@@ -44,6 +44,16 @@ function createAudioStream(): MediaStream {
   return { getAudioTracks: () => [track] } as unknown as MediaStream;
 }
 
+function captureTrack() {
+  let stopped = 0;
+  const track = Object.assign(new EventTarget(), {
+    readyState: 'live',
+    enabled: true,
+    stop: () => { stopped += 1; },
+  }) as unknown as MediaStreamTrack;
+  return { track, stopCount: () => stopped };
+}
+
 
 test('persists and restores noise suppression, defaulting on malformed data', () => {
   const values = new Map<string, string>();
@@ -94,6 +104,137 @@ test('threads noise suppression through permission and selected microphone const
     await session.close();
   }
 });
+
+test('stops a microphone acquired after the session closes', async () => {
+  const acquired = Promise.withResolvers<MediaStream>();
+  const started = Promise.withResolvers<void>();
+  const { track, stopCount } = captureTrack();
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+  const session = new MediaSession({
+    mediaDevices: { getUserMedia: () => { started.resolve(); return acquired.promise; } } as unknown as MediaDevices,
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  const pending = session.selectMicrophone('mic');
+  await started.promise;
+  await session.close();
+  acquired.resolve(stream);
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(stopCount(), 1);
+});
+
+test('returns an inactive permission result when microphone permission completes after close', async () => {
+  const acquired = Promise.withResolvers<MediaStream>();
+  const { track, stopCount } = captureTrack();
+  const stream = { getTracks: () => [track] } as unknown as MediaStream;
+  const session = new MediaSession({
+    mediaDevices: { getUserMedia: () => acquired.promise } as unknown as MediaDevices,
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  const pending = session.requestMicrophonePermission();
+  await session.close();
+  acquired.resolve(stream);
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(stopCount(), 1);
+});
+
+test('does not start microphone capture when closed while stopping the previous microphone', async () => {
+  let captures = 0;
+  const session = new MediaSession({
+    mediaDevices: { getUserMedia: () => { captures += 1; throw new Error('unexpected capture'); } } as unknown as MediaDevices,
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  const pending = session.selectMicrophone('mic');
+  await session.close();
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(captures, 0);
+});
+
+test('stops all display tracks acquired after the session closes', async () => {
+  const acquired = Promise.withResolvers<MediaStream>();
+  const started = Promise.withResolvers<void>();
+  const video = captureTrack();
+  const audio = captureTrack();
+  const stream = {
+    getTracks: () => [video.track, audio.track],
+    getVideoTracks: () => [video.track],
+    getAudioTracks: () => [audio.track],
+  } as unknown as MediaStream;
+  const source = { id: 'screen-1', name: 'Screen', kind: 'screen' } as const;
+  const session = new MediaSession({
+    mediaDevices: {} as MediaDevices,
+    displaySourceProvider: {
+      listSources: async () => [source],
+      capture: () => { started.resolve(); return acquired.promise; },
+    },
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  const pending = session.startDisplayShare(source, { audio: true });
+  await started.promise;
+  await session.close();
+  acquired.resolve(stream);
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(video.stopCount(), 1);
+  assert.equal(audio.stopCount(), 1);
+});
+
+test('does not start display capture when closed during source enumeration', async () => {
+  const sources = Promise.withResolvers<{ id: string; name: string; kind: 'screen' }[]>();
+  const source = { id: 'screen-1', name: 'Screen', kind: 'screen' } as const;
+  let captures = 0;
+  const session = new MediaSession({
+    mediaDevices: {} as MediaDevices,
+    displaySourceProvider: {
+      listSources: () => sources.promise,
+      capture: async () => { captures += 1; throw new Error('unexpected capture'); },
+    },
+    mesh: { attachTrack: () => undefined, detachTrack: () => undefined },
+  });
+
+  const pending = session.startDisplayShare(source);
+  await session.close();
+  sources.resolve([source]);
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(captures, 0);
+});
+
+test('does not start display capture when closed while stopping the previous share', async () => {
+  const detachStarted = Promise.withResolvers<void>();
+  const detachFinished = Promise.withResolvers<void>();
+  const { track } = captureTrack();
+  const stream = {
+    getTracks: () => [track],
+    getVideoTracks: () => [track],
+    getAudioTracks: () => [],
+  } as unknown as MediaStream;
+  const source = { id: 'screen-1', name: 'Screen', kind: 'screen' } as const;
+  let captures = 0;
+  const session = new MediaSession({
+    mediaDevices: {} as MediaDevices,
+    displaySourceProvider: {
+      listSources: async () => [source],
+      capture: async () => { captures += 1; return stream; },
+    },
+    mesh: {
+      attachTrack: () => undefined,
+      detachTrack: () => { detachStarted.resolve(); return detachFinished.promise; },
+    },
+  });
+
+  assert.equal((await session.startDisplayShare(source)).state, 'active');
+  await session.attachTrack('peer', track, stream);
+  const pending = session.startDisplayShare(source);
+  await detachStarted.promise;
+  const closing = session.close();
+  detachFinished.resolve();
+  await closing;
+  assert.equal((await pending).state, 'unsupported');
+  assert.equal(captures, 1);
+});
+
 test('marca o áudio da captura de tela como música e preserva a dica de vídeo', async () => {
   const videoTrack = Object.assign(new EventTarget(), { readyState: 'live', contentHint: '', stop: () => undefined }) as unknown as MediaStreamTrack;
   const audioTrack = Object.assign(new EventTarget(), { readyState: 'live', contentHint: '', stop: () => undefined }) as unknown as MediaStreamTrack;

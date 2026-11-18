@@ -81,9 +81,13 @@ impl LocalDatabase {
 
     fn cache_cloud_members(&mut self, group: &str, members: Vec<GroupMember>) -> Result<(), CoreError> {
         if !valid_id(group, 80) { return Err(CoreError::InvalidCache); }
-        validate_members(&members)?;
+        if !members.is_empty() { validate_members(&members)?; }
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|_| CoreError::Storage)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM cached_cloud_groups WHERE id=?1)", [group], |r| r.get(0)).map_err(|_| CoreError::Storage)?;
+        if members.is_empty() {
+            tx.execute("DELETE FROM cached_cloud_groups WHERE id=?1", [group]).map_err(|_| CoreError::Storage)?;
+            return tx.commit().map_err(|_| CoreError::Storage);
+        }
         if exists {
             tx.execute("DELETE FROM cached_cloud_members WHERE group_id=?1", [group]).map_err(|_| CoreError::Storage)?;
             insert_members(&tx, group, &members)?;
@@ -425,7 +429,7 @@ fn insert_members(tx:&rusqlite::Transaction<'_>,group:&str,ms:&[GroupMember])->R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::{EmptyPayload, StorageGetCachedCloudMembers, StoragePersistOutgoing, StoragePersistVerifiedIncoming, StorageGetHighestContiguous, StorageReadMissing, StoragePersistAck, StorageReplaceCloudCache};
+    use crate::contracts::{EmptyPayload, StorageCacheCloudMembers, StorageGetCachedCloudMembers, StoragePersistOutgoing, StoragePersistVerifiedIncoming, StorageGetHighestContiguous, StorageReadMissing, StoragePersistAck, StorageReplaceCloudCache};
     use serde_json::json;
 
     fn db_path(label:&str)->String {
@@ -626,6 +630,9 @@ mod tests {
         db.handle(StorageCommand::ReplaceCloudCache(StorageReplaceCloudCache{groups:vec![group.clone()],members_by_group:[("room".into(),vec![member.clone()])].into()})).unwrap();
         assert_eq!(db.handle(StorageCommand::GetCachedCloudGroups(EmptyPayload{})).unwrap(),json!([group]));
         assert_eq!(db.handle(StorageCommand::GetCachedCloudMembers(StorageGetCachedCloudMembers{group_id:"room".into()})).unwrap(),json!([member]));
+        db.handle(StorageCommand::CacheCloudMembers(StorageCacheCloudMembers{group_id:"room".into(),members:vec![]})).unwrap();
+        assert_eq!(db.handle(StorageCommand::GetCachedCloudGroups(EmptyPayload{})).unwrap(),json!([]));
+        assert_eq!(db.handle(StorageCommand::GetCachedCloudMembers(StorageGetCachedCloudMembers{group_id:"room".into()})).unwrap(),json!([]));
         drop(db);let _=std::fs::remove_file(&path);
     }
     #[test]

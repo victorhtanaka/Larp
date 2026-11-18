@@ -17,6 +17,8 @@
 - Métodos N-API assíncronos devolvem Promise e entregam callbacks somente no event loop. Nunca chamar JS com mutex/transaction SQLite aberto. Fechar é idempotente, cancela/descarta resultados de épocas antigas e espera a fila parar antes de fechar o banco; callback tardio não recria recursos depois de close.
 - O JSON interno é contrato privado, com discriminador e versão, campos exatos, limites de bytes e erros estáveis. Codec TS/Rust tem fixtures douradas para bytes assinados, envelopes, UUIDs, datas e valores nulos; não usar serialização genérica de map que altere os bytes canônicos.
 - Grupos, sessão cloud, mudanças de membership e mídia recebem epochs/identificadores de operação. Respostas antigas não alteram grupo novo, UI fechada ou sessão revogada. N-API não mantém handle de renderer nem acessa BrowserWindow.
+- Inscrições Realtime do mesmo grupo compartilham um canal; cancelar uma inscrição não encerra as demais. A inscrição de membros entrega um snapshot inicial, e mudanças de associação atualizam as chaves usadas para presença e sinalização.
+- ACKs recebidos são verificados com a chave do membro que os assinou e vinculados à mensagem local. Capturas que terminam após o encerramento da sessão são descartadas com suas tracks paradas.
 
 ## Compatibilidade e cutover de dados
 

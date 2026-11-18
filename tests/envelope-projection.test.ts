@@ -48,7 +48,7 @@ test('projection preserves opaque wire JSON and canonical stored envelope bytes'
   assert.deepEqual(Buffer.from(projection.signingBytesBase64, 'base64'), Buffer.from(envelopeSigningBytes(envelope)));
   assert.deepEqual(projection.header, {
     kind: 'chat', groupId: 'cloud-room', senderId: 'peer-user', recipientId: null,
-    messageId: 'peer-user-message-1', sequence: 1, authorId: null, requestId: null,
+    messageId: 'peer-user-message-1', sequence: 1, createdAt: '2026-01-01T00:00:00.000Z', authorId: null, requestId: null,
     afterSequence: null, throughSequence: null, limit: null,
   });
   assert.match(projection.envelopeJson, /\\ud800/u);

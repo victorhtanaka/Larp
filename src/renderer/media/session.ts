@@ -165,7 +165,7 @@ export class MediaSession {
     try {
       const temporaryStream = await this.mediaDevices.getUserMedia(microphoneConstraints(undefined, noiseSuppression));
       temporaryStream.getTracks().forEach((track) => track.stop());
-      return { state: 'active' };
+      return { state: this.closed ? 'unsupported' : 'active' };
     } catch (error) {
       const name = errorName(error);
       return { state: name === 'NotAllowedError' || name === 'PermissionDeniedError' ? 'permission-denied' : 'device-unavailable', error: errorMessage(error) };
@@ -176,8 +176,13 @@ export class MediaSession {
     if (!deviceId) return { state: 'device-unavailable', error: 'Select a microphone explicitly.' };
     if (this.closed || !this.mediaDevices || typeof this.mediaDevices.getUserMedia !== 'function') return { state: 'unsupported' };
     await this.stopMicrophone();
+    if (this.closed) return { state: 'unsupported' };
     try {
       const stream = await this.mediaDevices.getUserMedia(microphoneConstraints(deviceId, noiseSuppression));
+      if (this.closed) {
+        stream.getTracks().forEach((track) => track.stop());
+        return { state: 'unsupported' };
+      }
       this.selectedMicrophoneId = deviceId;
       this.microphone = stream;
       this.ownStream(stream);
@@ -316,12 +321,18 @@ export class MediaSession {
       return { state: 'device-unavailable', error: 'An explicitly selected screen or window is required.' };
     }
     const available = await this.listDisplaySources();
+    if (this.closed) return { state: 'unsupported' };
     if (available.state !== 'available' || !available.sources.some((candidate) => candidate.id === source.id && candidate.kind === source.kind)) {
       return { state: 'device-unavailable', error: 'The selected display source is no longer available.' };
     }
     await this.stopDisplayShare();
+    if (this.closed) return { state: 'unsupported' };
     try {
       const stream = await this.displaySourceProvider.capture(source, { audio: options.audio === true });
+      if (this.closed) {
+        stream?.getTracks().forEach((track) => track.stop());
+        return { state: 'unsupported' };
+      }
       if (!stream || stream.getVideoTracks().length === 0) {
         stream?.getTracks().forEach((track) => track.stop());
         return { state: 'device-unavailable', error: 'The selected source returned no video track.' };

@@ -37,10 +37,12 @@ enum WorkerMessage {
     Stop,
 }
 
-struct SubscriptionState { generation: usize, epoch: u64, group_id: String, kind: &'static str, member_ids: HashSet<String>, member_public_keys: HashMap<String, String>, presence_ready: bool, invalidated: bool, canceled: bool }
+struct SubscriptionState { generation: usize, epoch: u64, group_id: String, kind: &'static str, presence_ready: bool, invalidated: bool, canceled: bool }
 struct SubscriptionRegistry {
     states: HashMap<String, SubscriptionState>,
+    members: HashMap<String, Arc<HashMap<String, String>>>,
     canceled: HashSet<(String, u64)>,
+    untrusted_groups: HashSet<String>,
 }
 struct CoreInner {
     host_call: Mutex<Option<Arc<HostCall>>>,
@@ -54,6 +56,7 @@ struct CoreInner {
     identity_lock: tokio::sync::Mutex<()>,
     cloud_status: Mutex<Value>,
     subscriptions: Mutex<SubscriptionRegistry>,
+    membership_lock: tokio::sync::Mutex<()>,
     pending_errors: Arc<Mutex<HashMap<String, (u64, String)>>>,
     event_stop: Arc<AtomicBool>,
     event_worker: Mutex<Option<JoinHandle<()>>>,
@@ -84,7 +87,7 @@ pub async fn open_core(
     cloud_config: Option<CloudConfiguration>,
     host_call: HostCall,
     on_event: CoreEvent,
-) -> NapiResult<NativeLarpCore> {
+) -> napi::Result<NativeLarpCore> {
     if user_data_path.is_empty() || user_data_path.len() > 32_768 { return Err(napi_error(CoreError::InvalidRequest)); }
     let (cloud_http, cloud_url) = match cloud_config.as_ref() {
         Some(configuration) => {
@@ -164,7 +167,8 @@ pub async fn open_core(
         session_map: Mutex::new(None), session_lock: tokio::sync::Mutex::new(()),
         identity_lock: tokio::sync::Mutex::new(()),
         cloud_status: Mutex::new(json!({"state":"connecting","detail":"Starting cloud services","groups":[]})),
-        subscriptions: Mutex::new(SubscriptionRegistry { states: HashMap::new(), canceled: HashSet::new() }),
+        subscriptions: Mutex::new(SubscriptionRegistry { states: HashMap::new(), members: HashMap::new(), canceled: HashSet::new(), untrusted_groups: HashSet::new() }),
+        membership_lock: tokio::sync::Mutex::new(()),
         pending_errors, event_stop, event_worker: Mutex::new(Some(event_worker)),
         event_calls: AtomicUsize::new(0),
         admission_count: AtomicUsize::new(0), admission_bytes: AtomicUsize::new(0),
@@ -177,7 +181,7 @@ pub async fn open_core(
 #[napi]
 impl NativeLarpCore {
     #[napi]
-    pub async fn request(&self, request_json: String) -> NapiResult<String> {
+    pub async fn request(&self, request_json: String) -> napi::Result<String> {
         let bytes = request_json.len();
         if bytes > MAX_REQUEST_BYTES { return Ok(failure(CoreError::InputTooLarge)); }
         let permit = match RequestPermit::acquire(&self.inner, bytes) {
@@ -199,7 +203,7 @@ impl NativeLarpCore {
     }
 
     #[napi]
-    pub async fn ingest_cloud_event(&self, subscription_id: String, epoch: f64, event_json: String) -> NapiResult<()> {
+    pub async fn ingest_cloud_event(&self, subscription_id: String, epoch: f64, event_json: String) -> napi::Result<()> {
         let _call_permit = EventCallPermit::acquire(&self.inner).map_err(napi_error)?;
         let epoch = safe_js_epoch(epoch).ok_or_else(|| napi_error(CoreError::InvalidRequest))?;
         let bytes = event_json.len();
@@ -216,11 +220,10 @@ impl NativeLarpCore {
         if fields.keys().any(|key| !matches!(key.as_str(), "kind" | "payload" | "subscriptionId" | "epoch")) {
             return Err(napi_error(CoreError::InvalidRequest));
         }
-        let (generation, group_id, subscription_kind, member_ids, member_public_keys) = {
+        let (generation, group_id) = {
             let registry = self.inner.subscriptions.lock().map_err(|_| napi_error(CoreError::Internal))?;
             match registry.states.get(&subscription_id) {
-                Some(state) if state.epoch == epoch && !state.invalidated =>
-                    (state.generation, state.group_id.clone(), state.kind, state.member_ids.clone(), state.member_public_keys.clone()),
+                Some(state) if state.epoch == epoch && !state.invalidated => (state.generation, state.group_id.clone()),
                 _ => return Err(napi_error(CoreError::Closed)),
             }
         };
@@ -228,6 +231,16 @@ impl NativeLarpCore {
             Ok(permit) => permit,
             Err(CoreError::Backpressure) => return self.defer_event_error(&subscription_id, generation, epoch, &group_id).await,
             Err(error) => return Err(napi_error(error)),
+        };
+        // A bounded event waits here until preceding membership refreshes and
+        // deliveries finish, then reads the current membership rather than a stale copy.
+        let _membership_guard = self.inner.membership_lock.lock().await;
+        let (subscription_kind, member_public_keys) = {
+            let registry = self.inner.subscriptions.lock().map_err(|_| napi_error(CoreError::Internal))?;
+            let state = registry.states.get(&subscription_id)
+                .filter(|state| state.generation == generation && state.epoch == epoch && !state.invalidated)
+                .ok_or_else(|| napi_error(CoreError::Closed))?;
+            (state.kind, registry.members.get(&group_id).cloned().unwrap_or_default())
         };
         if let Some(raw) = fields.get("subscriptionId") {
             let value: String = serde_json::from_str(raw.get()).map_err(|_| napi_error(CoreError::InvalidRequest))?;
@@ -243,9 +256,19 @@ impl NativeLarpCore {
         };
         let mut signal_payload_json = None;
         let payload = match kind.as_str() {
-            "members" if subscription_kind == "members" => self.refresh_subscription_members(&subscription_id, generation, epoch, &group_id).await.map_err(napi_error)?,
+            "members" => match self.refresh_subscription_members(&subscription_id, generation, epoch, &group_id).await {
+                Ok(members) => members,
+                Err(error) => {
+                    if error != CoreError::Closed && self.subscription_is_current(&subscription_id, generation, epoch).unwrap_or(false) {
+                        let event = json!({"subscriptionId":subscription_id,"epoch":epoch,"kind":"error","payload":{"message":error.message()}}).to_string();
+                        let on_event = self.inner.on_event.lock().map_err(|_| napi_error(CoreError::Internal))?.as_ref().cloned();
+                        if let Some(on_event) = on_event { let _ = on_event.call_async(Ok(event)).await; }
+                    }
+                    return Err(napi_error(error));
+                }
+            },
             "presence" if subscription_kind == "presence" => {
-                let normalized = validate_presence_payload(incoming, &member_ids).map_err(napi_error)?;
+                let normalized = validate_presence_payload(incoming, &member_public_keys).map_err(napi_error)?;
                 let ready = normalized["ready"].as_bool().ok_or_else(|| napi_error(CoreError::InvalidCloudData))?;
                 if self.update_presence_ready(&subscription_id, generation, epoch, ready).map_err(napi_error)? {
                     let user_id = self.session_user_id().await.map_err(napi_error)?;
@@ -277,6 +300,9 @@ impl NativeLarpCore {
             .states.get(&subscription_id).is_some_and(|state| state.generation == generation && state.epoch == epoch && !state.invalidated) {
             return Err(napi_error(CoreError::Closed));
         }
+        // Membership notifications also arrive on presence and signal channels;
+        // refresh their authorization without forwarding a mismatched event.
+        if kind == "members" && subscription_kind != "members" { return Ok(()); }
         let event_json = match signal_payload_json {
             Some(raw) => raw_core_event(&subscription_id, epoch, &kind, &raw).map_err(napi_error)?,
             None => serde_json::to_string(&json!({"subscriptionId":subscription_id,"epoch":epoch,"kind":kind,"payload":payload}))
@@ -304,6 +330,9 @@ impl NativeLarpCore {
                     let state = registry.states.get_mut(id).ok_or_else(|| napi_error(CoreError::Internal))?;
                     state.invalidated = true;
                     state.canceled = true;
+                    if !registry.states.values().any(|state| state.group_id == group_id && !state.invalidated) {
+                        registry.members.remove(&group_id);
+                    }
                     Some((generation, group_id, canceled))
                 }
                 None => {
@@ -331,13 +360,17 @@ impl NativeLarpCore {
     async fn defer_event_error(&self, id: &str, generation: usize, epoch: u64, group_id: &str) -> NapiResult<()> {
         let invalidated = {
             let mut registry = self.inner.subscriptions.lock().map_err(|_| napi_error(CoreError::Internal))?;
-            match registry.states.get_mut(id) {
+            let invalidated = match registry.states.get_mut(id) {
                 Some(state) if state.generation == generation && state.epoch == epoch && !state.invalidated => {
                     state.invalidated = true;
                     true
                 }
                 _ => false,
+            };
+            if invalidated && !registry.states.values().any(|state| state.group_id == group_id && !state.invalidated) {
+                registry.members.remove(group_id);
             }
+            invalidated
         };
         if !invalidated { return Err(napi_error(CoreError::Closed)); }
         queue_pending_event_error(&self.inner.pending_errors, id, epoch, "Realtime event delivery queue is full.");
@@ -345,7 +378,7 @@ impl NativeLarpCore {
         Err(napi_error(CoreError::Backpressure))
     }
     #[napi]
-    pub async fn close(&self) -> NapiResult<()> {
+    pub async fn close(&self) -> napi::Result<()> {
         let _guard = self.inner.close_lock.lock().await;
         if self.inner.close_complete.load(Ordering::Acquire) { return Ok(()); }
         self.inner.closed.store(true, Ordering::Release);
@@ -394,6 +427,8 @@ impl NativeLarpCore {
         let mut registry = self.inner.subscriptions.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         registry.states.clear();
         registry.canceled.clear();
+        registry.members.clear();
+        registry.untrusted_groups.clear();
         drop(registry);
         if self.inner.host_call.is_poisoned() { close_error.get_or_insert(CoreError::Internal); }
         let host_call = self.inner.host_call.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
@@ -482,10 +517,21 @@ impl NativeLarpCore {
                 let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
                 prepare_subscription_registration(&mut registry, &id, epoch)?;
                 registry.states.insert(id.clone(), SubscriptionState { generation, epoch, group_id: group_id.clone(), kind,
-                    member_ids: HashSet::new(), member_public_keys: HashMap::new(), presence_ready: false, invalidated: false, canceled: false });
+                    presence_ready: false, invalidated: false, canceled: false });
             }
+            let _membership_guard = self.inner.membership_lock.lock().await;
             if !self.subscription_is_current(&id, generation, epoch)? { return Err(CoreError::Closed); }
-            let members = match self.get_cloud_members(&json!({"groupId":group_id})).await {
+            // Open first, then fetch: a change between fetching and opening would
+            // otherwise be lost until the next realtime notification.
+            let result = match self.call_host(op, payload).await {
+                Ok(value) => value,
+                Err(error) => {
+                    self.invalidate_subscription(&id, generation);
+                    let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
+                    return Err(error);
+                }
+            };
+            let members = match self.get_cloud_members_locked(&json!({"groupId":group_id}), Some((&id, generation, epoch))).await {
                 Ok(members) => members,
                 Err(error) => {
                     self.invalidate_subscription(&id, generation);
@@ -498,30 +544,6 @@ impl NativeLarpCore {
                 let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
                 return Err(CoreError::InvalidIdentity);
             }
-            let rows = members.as_array().ok_or(CoreError::InvalidCloudData)?;
-            let member_ids = rows.iter().filter_map(|member| member.get("userId").and_then(Value::as_str).map(str::to_owned)).collect::<HashSet<_>>();
-            let member_public_keys = rows.iter().filter_map(|member| Some((
-                member.get("userId")?.as_str()?.to_owned(),
-                member.get("publicKey")?.as_str()?.to_owned(),
-            ))).collect::<HashMap<_,_>>();
-            {
-                let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
-                match registry.states.get_mut(&id) {
-                    Some(state) if state.generation == generation && state.epoch == epoch && !state.invalidated => {
-                        state.member_ids = member_ids;
-                        state.member_public_keys = member_public_keys;
-                    }
-                    _ => return Err(CoreError::Closed),
-                }
-            }
-            let result = match self.call_host(op, payload).await {
-                Ok(value) => value,
-                Err(error) => {
-                    self.invalidate_subscription(&id, generation);
-                    let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
-                    return Err(error);
-                }
-            };
             if !self.subscription_is_current(&id, generation, epoch)? {
                 let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
                 return Err(CoreError::Closed);
@@ -542,6 +564,16 @@ impl NativeLarpCore {
                 let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
                 return Err(CoreError::Closed);
             }
+            if kind == "members" {
+                let event_json = members_event_json(&id, epoch, &members)?;
+                let on_event = self.inner.on_event.lock().map_err(|_| CoreError::Internal)?
+                    .as_ref().cloned().ok_or(CoreError::Closed)?;
+                if on_event.call_async(Ok(event_json)).await.is_err() {
+                    self.invalidate_subscription(&id, generation);
+                    let _ = self.call_host("close-channel", json!({"subscriptionId":id,"epoch":epoch,"groupId":group_id})).await;
+                    return Err(CoreError::CloudTransport);
+                }
+            }
             return Ok(result);
         }
         self.call_host(op, payload).await
@@ -549,8 +581,14 @@ impl NativeLarpCore {
 
     fn invalidate_subscription(&self, id: &str, generation: usize) {
         if let Ok(mut registry) = self.inner.subscriptions.lock() {
-            if let Some(state) = registry.states.get_mut(id).filter(|state| state.generation == generation) {
+            let group_id = registry.states.get_mut(id).filter(|state| state.generation == generation).map(|state| {
                 state.invalidated = true;
+                state.group_id.clone()
+            });
+            if let Some(group_id) = group_id {
+                if !registry.states.values().any(|state| state.group_id == group_id && !state.invalidated) {
+                    registry.members.remove(&group_id);
+                }
             }
         }
     }
@@ -725,23 +763,26 @@ impl NativeLarpCore {
                 .ok_or(CoreError::CloudAuthentication)?.to_owned()
         } else { String::new() };
         let (storage_op, body) = match op {
-            "persistOutgoingEnvelope" | "persistMessageAcknowledgement" => {
+            "persistOutgoingEnvelope" => {
                 let (_, public) = self.identity_private().await?;
                 verify_projection(&header, signature, signing_bytes, &public)?;
                 if header.get("senderId").and_then(Value::as_str) != Some(user_id.as_str()) { return Err(CoreError::InvalidIdentity); }
-                let storage_op = if is_ack { "persist-ack" } else { "persist-outgoing" };
-                (storage_op, json!({"localUserId":user_id,"envelopeJson":storage_json,"header":header}))
+                ("persist-outgoing", json!({"localUserId":user_id,"envelopeJson":storage_json,"header":header}))
             }
-            "persistVerifiedEnvelope" => {
+            "persistVerifiedEnvelope" | "persistMessageAcknowledgement" => {
+                let _membership_guard = self.inner.membership_lock.lock().await;
                 let group_id = header.get("groupId").and_then(Value::as_str).ok_or(CoreError::InvalidEnvelope)?;
+                if self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?.untrusted_groups.contains(group_id) {
+                    return Err(CoreError::InvalidIdentity);
+                }
                 let cached = self.run_storage(json!({"op":"get-cached-cloud-members","payload":{"groupId":group_id}}).to_string()).await?;
-                let keys = cached.as_array().ok_or(CoreError::InvalidCache)?.iter().filter_map(|row|
-                    Some((row.get("userId")?.as_str()?.to_owned(), row.get("publicKey")?.as_str()?.to_owned()))
-                ).collect::<HashMap<_,_>>();
-                let sender = header.get("senderId").and_then(Value::as_str).ok_or(CoreError::InvalidEnvelope)?;
-                let public = keys.get(sender).ok_or(CoreError::InvalidIdentity)?;
-                verify_projection(&header, signature, signing_bytes, public)?;
-                ("persist-verified-incoming", json!({"envelopeJson":storage_json,"header":header}))
+                verify_member_projection(&header, signature, signing_bytes, &cached)?;
+                let (storage_op, body) = if is_ack {
+                    ("persist-ack", json!({"localUserId":user_id,"envelopeJson":storage_json,"header":header}))
+                } else {
+                    ("persist-verified-incoming", json!({"envelopeJson":storage_json,"header":header}))
+                };
+                return self.run_storage(json!({"op":storage_op,"payload":body}).to_string()).await;
             }
             _ => return Err(CoreError::InvalidRequest),
         };
@@ -846,6 +887,7 @@ impl NativeLarpCore {
         }
     }
     async fn refresh_cloud_inner(&self) -> Result<Value, CoreError> {
+        let _membership_guard = self.inner.membership_lock.lock().await;
         let session = self.cloud_session().await?;
         let user_id = session["user"]["id"].as_str().filter(|id| !id.is_empty()).ok_or(CoreError::CloudAuthentication)?.to_owned();
         let identity = self.get_public_identity().await?;
@@ -858,11 +900,15 @@ impl NativeLarpCore {
         for row in rows {
             let group = group_to_dto(row)?;
             let id = group["id"].as_str().ok_or(CoreError::InvalidCloudData)?.to_owned();
-            members_by_group.insert(id, self.get_cloud_members(&json!({"groupId":group["id"]})).await?);
+            members_by_group.insert(id, self.get_cloud_members_locked(&json!({"groupId":group["id"]}), None).await?);
             groups.push(group);
         }
         let cache = json!({"op":"replace-cloud-cache","payload":{"groups":groups,"membersByGroup":members_by_group}});
         self.run_storage(cache.to_string()).await?;
+        {
+            let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
+            registry.members.retain(|group_id, _| members_by_group.contains_key(group_id));
+        }
         let status = json!({"state":"ready","detail":"Connected","groups":groups,"userId":user_id});
         *self.inner.cloud_status.lock().map_err(|_| CoreError::Internal)? = status.clone();
         Ok(status)
@@ -957,6 +1003,7 @@ impl NativeLarpCore {
         Ok(profile)
     }
     async fn update_cached_profile(&self, user_id: &str, profile: &Value) -> Result<(), CoreError> {
+        let _membership_guard = self.inner.membership_lock.lock().await;
         let groups = self.run_storage(json!({"op":"get-cached-cloud-groups","payload":{}}).to_string()).await?;
         for group in groups.as_array().ok_or(CoreError::InvalidCache)? {
             let group_id = group.get("id").and_then(Value::as_str).ok_or(CoreError::InvalidCache)?;
@@ -976,6 +1023,10 @@ impl NativeLarpCore {
         Ok(())
     }
     async fn get_cloud_members(&self, payload: &Value) -> Result<Value, CoreError> {
+        let _membership_guard = self.inner.membership_lock.lock().await;
+        self.get_cloud_members_locked(payload, None).await
+    }
+    async fn get_cloud_members_locked(&self, payload: &Value, origin: Option<(&str, usize, u64)>) -> Result<Value, CoreError> {
         let group_id = payload.get("groupId").cloned().ok_or(CoreError::InvalidRequest)?;
         let members = self.rpc("list_group_members", json!({"p_group_id":group_id})).await?;
         let rows = members.as_array().ok_or(CoreError::InvalidCloudData)?;
@@ -1003,25 +1054,37 @@ impl NativeLarpCore {
             Ok(json!({"userId":id,"publicKey":public_key,"joinedAt":joined_at,"role":role,"profile":profile_by_user.remove(id)}))
         }).collect::<Result<Vec<_>, CoreError>>()?;
         let group_id = group_id.as_str().ok_or(CoreError::InvalidRequest)?;
+        if let Some((id, generation, epoch)) = origin {
+            if !self.subscription_is_current(id, generation, epoch)? { return Err(CoreError::Closed); }
+        }
         self.run_storage(json!({"op":"cache-cloud-members","payload":{"groupId":group_id,"members":members}}).to_string()).await?;
+        if let Some((id, generation, epoch)) = origin {
+            if !self.subscription_is_current(id, generation, epoch)? { return Err(CoreError::Closed); }
+        }
+        {
+            let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
+            update_group_subscription_members(&mut registry, group_id, &members)?;
+            registry.untrusted_groups.remove(group_id);
+        }
         Ok(Value::Array(members))
     }
     async fn refresh_subscription_members(&self, id: &str, generation: usize, epoch: u64, group_id: &str) -> Result<Value, CoreError> {
-        let members = self.get_cloud_members(&json!({"groupId":group_id})).await?;
-        let rows = members.as_array().ok_or(CoreError::InvalidCloudData)?;
-        let member_ids = rows.iter().filter_map(|member| member.get("userId").and_then(Value::as_str).map(str::to_owned)).collect::<HashSet<_>>();
-        let member_public_keys = rows.iter().filter_map(|member| Some((
-            member.get("userId")?.as_str()?.to_owned(),
-            member.get("publicKey")?.as_str()?.to_owned(),
-        ))).collect::<HashMap<_,_>>();
-        let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
-        match registry.states.get_mut(id) {
-            Some(state) if state.generation == generation && state.epoch == epoch && !state.invalidated => {
-                state.member_ids = member_ids;
-                state.member_public_keys = member_public_keys;
+        let members = match self.get_cloud_members_locked(&json!({"groupId":group_id}), Some((id, generation, epoch))).await {
+            Ok(members) => members,
+            Err(error) if error != CoreError::Closed => {
+                {
+                    let mut registry = self.inner.subscriptions.lock().map_err(|_| CoreError::Internal)?;
+                    if !registry.states.get(id).is_some_and(|state| state.generation == generation && state.epoch == epoch && !state.invalidated) {
+                        return Err(CoreError::Closed);
+                    }
+                    update_group_subscription_members(&mut registry, group_id, &[])?;
+                    registry.untrusted_groups.insert(group_id.to_owned());
+                }
+                return Err(error);
             }
-            _ => return Err(CoreError::Closed),
-        }
+            Err(error) => return Err(error),
+        };
+        if !self.subscription_is_current(id, generation, epoch)? { return Err(CoreError::Closed); }
         Ok(members)
     }
     fn update_presence_ready(&self, id: &str, generation: usize, epoch: u64, ready: bool) -> Result<bool, CoreError> {
@@ -1142,6 +1205,33 @@ fn replace_existing_file_windows(temp: &std::path::Path, path: &std::path::Path)
     }
     Err(CoreError::Storage)
 }
+fn verify_member_projection(header: &Value, signature: &Value, signing_bytes: &str, members: &Value) -> Result<(), CoreError> {
+    let sender = header.get("senderId").and_then(Value::as_str).ok_or(CoreError::InvalidEnvelope)?;
+    let public = members.as_array().ok_or(CoreError::InvalidCache)?.iter()
+        .find(|member| member.get("userId").and_then(Value::as_str) == Some(sender))
+        .and_then(|member| member.get("publicKey").and_then(Value::as_str))
+        .ok_or(CoreError::InvalidIdentity)?;
+    verify_projection(header, signature, signing_bytes, public)
+}
+
+fn update_group_subscription_members(registry: &mut SubscriptionRegistry, group_id: &str, members: &[Value]) -> Result<(), CoreError> {
+    let mut keys = HashMap::with_capacity(members.len());
+    for member in members {
+        let id = member.get("userId").and_then(Value::as_str).ok_or(CoreError::InvalidCloudData)?;
+        let key = member.get("publicKey").and_then(Value::as_str).ok_or(CoreError::InvalidCloudData)?;
+        if keys.insert(id.to_owned(), key.to_owned()).is_some() { return Err(CoreError::InvalidCloudData); }
+    }
+    if registry.states.values().any(|state| state.group_id == group_id && !state.invalidated) {
+        registry.members.insert(group_id.to_owned(), Arc::new(keys));
+    }
+    Ok(())
+}
+
+fn members_event_json(id: &str, epoch: u64, members: &Value) -> Result<String, CoreError> {
+    serde_json::to_string(&json!({"subscriptionId":id,"epoch":epoch,"kind":"members","payload":members}))
+        .map_err(|_| CoreError::Internal)
+}
+
 fn verify_projection(header: &Value, signature: &Value, signing_bytes_base64: &str, public_key: &str) -> Result<(), CoreError> {
     if signature.get("algorithm").and_then(Value::as_str) != Some("Ed25519") { return Err(CoreError::InvalidEnvelope); }
     let signature = signature.get("signature").and_then(Value::as_str).ok_or(CoreError::InvalidEnvelope)?;
@@ -1193,7 +1283,7 @@ fn validate_signal_header<'a>(header: &'a Value, group_id: &str, user_id: &str, 
     }
     Ok(recipient)
 }
-fn validate_presence_payload(value: Value, members: &HashSet<String>) -> Result<Value, CoreError> {
+fn validate_presence_payload(value: Value, members: &HashMap<String, String>) -> Result<Value, CoreError> {
     let object = value.as_object().ok_or(CoreError::InvalidCloudData)?;
     if object.len() != 2 { return Err(CoreError::InvalidCloudData); }
     let ready = object.get("ready").and_then(Value::as_bool).ok_or(CoreError::InvalidCloudData)?;
@@ -1201,7 +1291,7 @@ fn validate_presence_payload(value: Value, members: &HashSet<String>) -> Result<
     let mut statuses = serde_json::Map::new();
     for (user_id, sessions) in presence {
         if user_id.is_empty() || user_id.len() > 128 { return Err(CoreError::InvalidCloudData); }
-        if !members.contains(user_id) { continue; }
+        if !members.contains_key(user_id) { continue; }
         let sessions = sessions.as_array().ok_or(CoreError::InvalidCloudData)?;
         let mut status = None;
         for session in sessions {
@@ -1754,13 +1844,13 @@ mod tests {
     }
     #[test]
     fn early_subscription_cancel_blocks_same_epoch_and_cleans_stale_registration() {
-        let mut registry = SubscriptionRegistry { states: HashMap::new(), canceled: HashSet::new() };
+        let mut registry = SubscriptionRegistry { states: HashMap::new(), members: HashMap::new(), canceled: HashSet::new(), untrusted_groups: HashSet::new() };
         assert_eq!(insert_cancel_tombstone(&mut registry, "subscription", 7), Ok(true));
         assert_eq!(prepare_subscription_registration(&mut registry, "subscription", 7), Err(CoreError::Closed));
         assert!(subscription_canceled_for_registration(&mut registry, "subscription", 7));
         registry.states.insert("subscription".into(), SubscriptionState {
-            generation: 1, epoch: 7, group_id: "room".into(), kind: "signal", member_ids: HashSet::new(),
-            member_public_keys: HashMap::new(), presence_ready: false, invalidated: true, canceled: true,
+            generation: 1, epoch: 7, group_id: "room".into(), kind: "signal",
+            presence_ready: false, invalidated: true, canceled: true,
         });
         assert_eq!(prepare_subscription_registration(&mut registry, "subscription", 8), Ok(()));
         assert!(!registry.states.contains_key("subscription"));
@@ -1853,13 +1943,11 @@ mod tests {
             epoch: 7,
             group_id: "room".into(),
             kind: "presence",
-            member_ids: HashSet::new(),
-            member_public_keys: HashMap::new(),
             presence_ready: false,
             invalidated: false,
             canceled: false,
         });
-        let mut registry = SubscriptionRegistry { states, canceled: HashSet::new() };
+        let mut registry = SubscriptionRegistry { states, members: HashMap::new(), canceled: HashSet::new(), untrusted_groups: HashSet::new() };
 
         assert_eq!(NativeLarpCore::update_presence_ready_state(&mut registry, "sub", 3, 7, false), Ok(false));
         assert_eq!(NativeLarpCore::update_presence_ready_state(&mut registry, "sub", 3, 7, true), Ok(true));
@@ -1874,7 +1962,7 @@ mod tests {
 
     #[test]
     fn presence_projection_aggregates_trusted_member_sessions() {
-        let members = ["user-1".to_owned()].into_iter().collect::<HashSet<_>>();
+        let members = [("user-1".to_owned(), String::new())].into_iter().collect::<HashMap<_,_>>();
         assert_eq!(
             validate_presence_payload(json!({"presence":{
                 "user-1":[{"userId":"user-1","status":"away"},{"userId":"user-1","status":"online"}],
@@ -1911,6 +1999,31 @@ mod tests {
         assert_eq!(verify_received_signal(&header,"room","other",&keys,"",&signature),Err(CoreError::InvalidEnvelope));
         assert_eq!(verify_received_signal(&header,"room","local",&HashMap::new(),"",&signature),Err(CoreError::InvalidIdentity));
     }
+    #[test]
+    fn member_changes_update_live_group_subscriptions_and_revoke_peer_access() {
+        let public = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n";
+        let signature = json!({"algorithm":"Ed25519","signature":"5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="});
+        let state = |group: &str, kind| SubscriptionState {
+            generation: 1, epoch: 7, group_id: group.to_owned(), kind,
+            presence_ready: false, invalidated: false, canceled: false,
+        };
+        let mut registry = SubscriptionRegistry {
+            states: [("members".into(), state("room", "members")), ("presence".into(), state("room", "presence")),
+                ("signal".into(), state("room", "signal")), ("other".into(), state("other", "signal"))].into(),
+            members: HashMap::new(), canceled: HashSet::new(), untrusted_groups: HashSet::new(),
+        };
+        let rows = vec![json!({"userId":"peer","publicKey":public})];
+        update_group_subscription_members(&mut registry, "room", &rows).unwrap();
+        let presence = json!({"presence":{"peer":[{"userId":"peer","status":"online"}]},"ready":true});
+        assert_eq!(validate_presence_payload(presence.clone(), &registry.members["room"]).unwrap()["presence"]["peer"], "online");
+        let header = json!({"kind":"media-state","groupId":"room","senderId":"peer","recipientId":"local"});
+        assert!(verify_received_signal(&header, "room", "local", &registry.members["room"], "", &signature).is_ok());
+        assert!(!registry.members.contains_key("other"));
+        update_group_subscription_members(&mut registry, "room", &[json!({"userId":"local","publicKey":public})]).unwrap();
+        assert_eq!(validate_presence_payload(presence, &registry.members["room"]).unwrap()["presence"], json!({}));
+        assert_eq!(verify_received_signal(&header, "room", "local", &registry.members["room"], "", &signature), Err(CoreError::InvalidIdentity));
+    }
+
     #[test]
     fn signed_projection_verification_requires_valid_ed25519_signature() {
         let public = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n";

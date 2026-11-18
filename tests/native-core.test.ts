@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createNativeCore, NativeCoreError } from '../src/main/native-core';
+import { createNativeCore, NativeCoreError, type NativeCoreClient } from '../src/main/native-core';
+import { projectEnvelope } from '../src/main/envelope-projection';
+import { signProtocolEnvelope } from '../src/shared/webrtc-protocol';
 import type { IdentitySignature } from '../src/shared/cloud-contracts';
 import type { HostCall, JsonResponse } from '../src/shared/native-core-contracts';
 
@@ -185,6 +190,183 @@ test('real Node addon permits host-call reentrancy without blocking storage', { 
     assert.equal(identity.algorithm, 'Ed25519');
   } finally {
     if (core) await core.close();
+    await rm(userDataPath, { recursive: true, force: true });
+  }
+});
+
+test('native membership snapshots, remote acknowledgements and realtime authorization stay consistent', { timeout: 20_000 }, async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'larp-native-members-'));
+  const groupId = '00000000-0000-0000-0000-000000000001';
+  const localId = '00000000-0000-0000-0000-000000000002';
+  const peerId = '00000000-0000-0000-0000-000000000003';
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const peerKeys = generateKeyPairSync('ed25519');
+  const peerPublic = peerKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  let localPublic = '';
+  let includePeer = false;
+  let rejectMembers = false;
+  let releaseMembers: (() => void) | undefined;
+  let memberRequestStarted: (() => void) | undefined;
+  const server = createServer((request, response) => {
+    request.resume();
+    const send = (value: unknown) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    const url = request.url ?? '';
+    if (url === '/auth/v1/signup') {
+      send({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600, user: { id: localId } });
+    } else if (url === '/rest/v1/rpc/register_identity') {
+      send(null);
+    } else if (url === '/rest/v1/rpc/list_my_groups') {
+      send([{ id: groupId, name: 'Room', created_at: timestamp, member_count: includePeer ? 2 : 1, role: 'owner' }]);
+    } else if (url === '/rest/v1/rpc/list_group_members') {
+      if (rejectMembers) {
+        response.writeHead(403, { 'content-type': 'application/json' });
+        response.end('{}');
+        return;
+      }
+      const rows = [{ user_id: localId, public_key: localPublic, joined_at: timestamp, role: 'owner' }];
+      if (includePeer) rows.push({ user_id: peerId, public_key: peerPublic, joined_at: timestamp, role: 'member' });
+      if (memberRequestStarted) {
+        const started = memberRequestStarted;
+        memberRequestStarted = undefined;
+        const gate = Promise.withResolvers<void>();
+        releaseMembers = gate.resolve;
+        started();
+        void gate.promise.then(() => send(rows));
+      } else send(rows);
+    } else if (url.startsWith('/rest/v1/larp_user_profiles?')) {
+      send([]);
+    } else {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end('{}');
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  let core: NativeCoreClient | undefined;
+  const events: Array<{ subscriptionId: string; epoch: number; kind: string; payload: unknown }> = [];
+  const secrets = createEphemeralHostCall();
+  try {
+    core = await createNativeCore(userDataPath, { url: `http://127.0.0.1:${address.port}`, anonKey: 'sb_publishable_test' }, async (raw) => {
+      const call = JSON.parse(raw) as HostCall;
+      if (call.kind === 'secrets') return secrets(raw);
+      if (call.kind === 'codec') return JSON.stringify(successful(projectEnvelope(call.payload.envelopeJson)));
+      if (call.op === 'open-channel' && call.payload.subscriptionId === 'members') includePeer = true;
+      return JSON.stringify(successful(call.op === 'track-presence' ? 'ok' : null));
+    }, (raw) => events.push(JSON.parse(raw)));
+    localPublic = readPublicIdentity(await core.request({ version: 1, op: 'getPublicIdentity', payload: {} })).publicKey;
+    await core.request({ version: 1, op: 'refreshCloud', payload: {} });
+    await core.request({ version: 1, op: 'subscribeCloudMembers', payload: { groupId, subscriptionId: 'members', epoch: 7 } });
+    assert.deepEqual(events.find((event) => event.subscriptionId === 'members'), {
+      subscriptionId: 'members', epoch: 7, kind: 'members',
+      payload: [
+        { userId: localId, publicKey: localPublic, joinedAt: timestamp, role: 'owner', profile: null },
+        { userId: peerId, publicKey: peerPublic, joinedAt: timestamp, role: 'member', profile: null },
+      ],
+    });
+    await core.request({ version: 1, op: 'subscribeCloudPresence', payload: { groupId, subscriptionId: 'presence', epoch: 8 } });
+    await core.request({ version: 1, op: 'subscribeSignals', payload: { groupId, subscriptionId: 'signals', epoch: 9 } });
+
+    const localSigner = {
+      participantId: localId,
+      sign: async (bytes: Uint8Array) => readIdentitySignature(await core!.request({
+        version: 1, op: 'signIdentityPayload', payload: { payloadBase64: Buffer.from(bytes).toString('base64') },
+      })),
+    };
+    const peerSigner = {
+      participantId: peerId,
+      sign: async (bytes: Uint8Array): Promise<IdentitySignature> => ({
+        algorithm: 'Ed25519', signature: sign(null, bytes, peerKeys.privateKey).toString('base64'),
+      }),
+    };
+    const message = await signProtocolEnvelope({
+      version: 1, kind: 'chat', groupId, senderId: localId, messageId: 'message-1', sequence: 1,
+      content: 'hello', createdAt: timestamp,
+    }, localSigner);
+    await core.request({ version: 1, op: 'persistOutgoingEnvelope', payload: { message } });
+    const acknowledgement = await signProtocolEnvelope({
+      version: 1, kind: 'ack', groupId, senderId: peerId, messageId: 'message-1', sequence: 1,
+    }, peerSigner);
+    await assert.rejects(core.request({
+      version: 1, op: 'persistMessageAcknowledgement',
+      payload: { acknowledgement: { ...acknowledgement, signature: message.signature } },
+    }), (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+    await core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement } });
+    await core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement } });
+    const missing = await signProtocolEnvelope({
+      version: 1, kind: 'ack', groupId, senderId: peerId, messageId: 'missing', sequence: 2,
+    }, peerSigner);
+    await assert.rejects(core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement: missing } }),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'conflict');
+
+    const signal = await signProtocolEnvelope({
+      version: 1, kind: 'connect-request', groupId, senderId: peerId, recipientId: localId,
+    }, peerSigner);
+    const signalEvent = JSON.stringify({ kind: 'signal', payload: { envelope: signal } });
+    const presenceEvent = JSON.stringify({ kind: 'presence', payload: {
+      presence: { [peerId]: [{ userId: peerId, status: 'online' }] }, ready: true,
+    } });
+    await core.ingestCloudEvent('signals', 9, signalEvent);
+    await core.ingestCloudEvent('presence', 8, presenceEvent);
+    assert.deepEqual(events.at(-1)?.payload, { presence: { [peerId]: 'online' }, ready: true });
+
+    includePeer = false;
+    const started = Promise.withResolvers<void>();
+    memberRequestStarted = started.resolve;
+    const removal = core.ingestCloudEvent('members', 7, JSON.stringify({ kind: 'members', payload: null }));
+    await started.promise;
+    const pendingPresence = core.ingestCloudEvent('presence', 8, presenceEvent);
+    releaseMembers!();
+    await removal;
+    await pendingPresence;
+    const removalSnapshot = events.findLast((event) => event.subscriptionId === 'members' && event.kind === 'members');
+    assert.deepEqual((removalSnapshot?.payload as Array<{ userId: string }>).map((member) => member.userId), [localId]);
+    const cachedAfterRemoval = await core.request({ version: 1, op: 'getCachedCloudMembers', payload: { groupId } }) as Array<{ userId: string }>;
+    assert.deepEqual(cachedAfterRemoval.map((member) => member.userId), [localId]);
+    assert.deepEqual(events.at(-1)?.payload, { presence: {}, ready: true });
+    await assert.rejects(core.ingestCloudEvent('signals', 9, signalEvent),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+    await assert.rejects(core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement } }),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+    includePeer = true;
+    await core.ingestCloudEvent('members', 7, JSON.stringify({ kind: 'members', payload: null }));
+    await core.ingestCloudEvent('signals', 9, signalEvent);
+    await core.ingestCloudEvent('presence', 8, presenceEvent);
+    assert.deepEqual(events.at(-1)?.payload, { presence: { [peerId]: 'online' }, ready: true });
+    rejectMembers = true;
+    await assert.rejects(core.ingestCloudEvent('members', 7, JSON.stringify({ kind: 'members', payload: null })));
+    await assert.rejects(core.ingestCloudEvent('signals', 9, signalEvent),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+    await assert.rejects(core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement } }),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+    assert.equal((await core.request({ version: 1, op: 'getCachedCloudMembers', payload: { groupId } }) as unknown[]).length, 2);
+    rejectMembers = false;
+    await core.ingestCloudEvent('members', 7, JSON.stringify({ kind: 'members', payload: null }));
+    await core.ingestCloudEvent('signals', 9, signalEvent);
+    await core.request({ version: 1, op: 'persistMessageAcknowledgement', payload: { acknowledgement } });
+    await assert.rejects(core.ingestCloudEvent('members', 6, JSON.stringify({ kind: 'members', payload: null })),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'stale-context');
+    includePeer = false;
+    const staleStarted = Promise.withResolvers<void>();
+    memberRequestStarted = staleStarted.resolve;
+    const staleRefresh = core.ingestCloudEvent('members', 7, JSON.stringify({ kind: 'members', payload: null }));
+    await staleStarted.promise;
+    await core.cancelSubscription('members', 7);
+    releaseMembers!();
+    await assert.rejects(staleRefresh, (error: unknown) => error instanceof NativeCoreError && error.code === 'stale-context');
+    await core.ingestCloudEvent('signals', 9, signalEvent);
+    await core.ingestCloudEvent('presence', 8, JSON.stringify({ kind: 'members', payload: null }));
+    await assert.rejects(core.ingestCloudEvent('signals', 9, signalEvent),
+      (error: unknown) => error instanceof NativeCoreError && error.code === 'invalid-identity');
+  } finally {
+    releaseMembers?.();
+    if (core) await core.close();
+    server.close();
+    await once(server, 'close');
     await rm(userDataPath, { recursive: true, force: true });
   }
 });

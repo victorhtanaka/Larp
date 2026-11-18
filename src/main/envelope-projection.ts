@@ -20,6 +20,7 @@ export interface EnvelopeProjection {
     recipientId: string | null;
     messageId: string | null;
     sequence: number | null;
+    createdAt: string | null;
     authorId: string | null;
     requestId: string | null;
     afterSequence: number | null;
@@ -40,6 +41,7 @@ function projectValidatedEnvelope(envelope: SignedProtocolEnvelope, envelopeJson
     recipientId: 'recipientId' in envelope ? envelope.recipientId : null,
     messageId: 'messageId' in envelope ? envelope.messageId : null,
     sequence: 'sequence' in envelope ? envelope.sequence : null,
+    createdAt: envelope.kind === 'chat' ? envelope.createdAt : null,
     authorId: 'authorId' in envelope ? envelope.authorId : null,
     requestId: 'requestId' in envelope ? envelope.requestId : null,
     afterSequence: 'afterSequence' in envelope ? envelope.afterSequence : null,
